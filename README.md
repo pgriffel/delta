@@ -1,4 +1,4 @@
-delta
+Delta
 =====
 
 The Delta programming language
