@@ -1,0 +1,231 @@
+# ----------------------------------------------------------------------------
+# The Delta Compiler
+# ----------------------------------------------------------------------------
+
+module compiler
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+include io, ast, parser, scheme_ast, location, config
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare compile_file :: (String) -> String
+declare compile_project :: (String) -> String
+
+# ----------------------------------------------------------------------------
+# The compiler
+# ----------------------------------------------------------------------------
+
+public function compile_file(name) =
+  let 
+      mod := read_module(name);
+      file_name := output_name(mod);
+      compile_module(mod, file_name)
+  in
+      file_name
+  end
+
+public function compile_project(name) =
+  let
+      modules := read_project(name);
+      let unchecked := modules in
+          while unchecked != [] do
+	      let mod := first(unchecked) in
+                  check_module(mod, accesable_names(mod, modules))
+	      end;
+              unchecked := rest(unchecked)
+          end
+      end;
+      compile_concurrent(modules)
+  in
+      output_name(first(reverse(modules)))
+  end
+
+function read_project(name) = 
+  let
+      discovered := [name];
+      loaded := [];
+      modules := [];
+      while discovered != [] do
+          let
+	      name := first(discovered);
+	      mod := read_module(name);
+	      includes := map_list(fun (name) format("$x.delta", x := name) end,
+	                           filter_list(fun (x) not(is_system_module(x)) end, 
+                                               module_includes(mod)))
+	  in
+	      loaded := cons(name, loaded);
+	      discovered := union(rest(discovered), difference(includes, loaded));
+	      modules := cons(mod, modules)
+          end
+      end
+  in
+      modules
+  end
+
+procedure check_module(mod, globals) =
+  let
+      definitions := module_definitions(mod);
+      violations := [];
+      okay := true
+  in
+      while definitions != [] do
+          let def := first(definitions);
+              violations := scope_violations(definition_body(def), ["skip"], globals) in
+	      if violations != [] then
+	          print_line(format("\nErrors while compiling '$x' in module '$y':", 
+                                    x := definition_name(def); 
+                                    y := module_name(mod)));
+	          while violations != [] do
+		      print_line(format("\n$y\n\n  $a '$x' unknown\n",
+                                         var := first(violations);
+			    	         a := if var.is_global then "global" else "variable" end;
+					 x := var.name;
+				         y := range_text(node_range(var))));
+	              violations := rest(violations)
+	          end;
+		  okay := false
+              end	      
+	  end;
+	  definitions := rest(definitions)
+      end;
+      if not(okay) then
+          throw("Compilation aborted\n")
+      end
+  end
+
+procedure compile_concurrent(modules) =
+  if modules != [] then
+      let first := first(modules) in
+          compile_module(first, output_name(first)) | 
+          compile_concurrent(rest(modules))
+      end
+  end
+  
+procedure compile_module(mod, dst_name) =
+  let
+      name := module_name(mod)
+  in
+      # Open the file
+      handle := open_output_file(dst_name);
+
+      # Write the header
+      write_line(handle, "#lang racket\n");
+      write_line(handle, format(";; Generated code for Delta module '$x' \n", x := name));
+
+      # Write the requires
+      write_line(handle, "(require delta/runtime)");
+      if name != "standard" then
+          write_line(handle, "(require delta/standard)")
+      end;
+      let includes := filter_list(fun (x) x != "standard" end, module_includes(mod)) in
+          while includes != [] do
+              let name := first(includes) in
+	          if is_system_module(name) then
+	              write_line(handle, format("(require delta/$x)", x := name))
+	          else
+                      write_line(handle, format("(require $c$x.rkt$c)", c := \"; x := name))
+	          end
+              end;
+              includes := rest(includes)
+	  end
+      end;
+
+      # Write the provide
+      let public_elements := public_definitions(mod) in
+          if public_elements != [] then
+              write(handle, "\n(provide");
+              while public_elements != [] do
+	          write(handle, " ");
+	          write(handle, scheme_name(definition_name(first(public_elements))));
+	          public_elements := rest(public_elements)
+              end;
+              write(handle, ")\n")
+	  end
+      end;
+
+      # Write the definitions
+      let elements := module_definitions(mod) in
+          while elements != [] do
+              let def := first(elements) in
+	          write_line(handle, format("\n(define $x $y)", 
+                                            x := scheme_name(definition_name(def));
+                                            y := scheme_string(definition_body(def))))
+              end;
+              elements := rest(elements)
+	  end
+      end;
+
+      # If necessary write a call to main to start the runtime
+      if is_member("main", map_list(global definition_name, module_definitions(mod))) then
+          write_line(handle, format("\n\n$call", call := main_call()))
+      end;
+
+      # Finally close the file
+      close_file(handle)
+
+  end
+
+# ----------------------------------------------------------------------------
+# Utilities
+# ----------------------------------------------------------------------------
+
+function output_name(mod) = replace_suffix(module_name(mod), ".rkt")
+
+function scheme_name(name) = scheme_string(make_variable(name, true, no_range()))
+
+function public_definitions(mod) = filter_list(global definition_is_public, module_definitions(mod))
+
+function accesable_names(mod, modules) =
+  let
+      definitions := module_definitions(mod);
+      includes := module_includes(mod);
+      to_include := modules;
+      while to_include != [] do
+          let first := first(to_include) in
+              if is_member(module_name(first), includes) then
+	          definitions := append(definitions, public_definitions(first))
+	      end
+	  end;
+          to_include := rest(to_include)
+      end
+  in
+      definitions
+  end
+
+function main_call() =
+  let
+      handler := let err_var := gen_scheme_var("err") in
+		     scheme_lambda([err_var], 
+                                   scheme_application("displayln", 
+                                                      [scheme_application("exn-message", [err_var])]))
+		 end;
+      body := scheme_application("vector->list", [scheme_application("current-command-line-arguments", [])])
+  in
+      scheme_let(scheme_atom("dummy"),
+	         scheme_application("with-handlers",
+                                    [scheme_list([scheme_list([scheme_atom("exn:fail?"), handler])]),
+                                     scheme_application(scheme_name("main"),
+                                                        [scheme_false(), scheme_false(), scheme_false(), body])]),
+                 scheme_application("void", []))
+  end										    

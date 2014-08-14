@@ -1,0 +1,170 @@
+# ----------------------------------------------------------------------------
+# Source Code Locations
+# ----------------------------------------------------------------------------
+
+module location
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+include io
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare make_location :: (String, Number, Number, Number) -> Location
+declare no_location :: () -> Location
+declare location_text :: (Location) -> String
+
+declare make_range :: (Location, Location) -> Range
+declare no_range :: () -> Range
+declare combine_ranges :: (Range, Range) -> Range
+declare range_text :: (Range) -> String
+
+declare throw_with_location :: (String, {}, Location) -> {}
+declare throw_with_range :: (String, {}, Range) -> {}
+
+# ----------------------------------------------------------------------------
+# Location
+# ----------------------------------------------------------------------------
+
+public function make_location(file, row, column, position) =
+  tuple(file, row, column, position)
+
+public function no_location() =
+  tuple("", 0, 0, 0)
+
+function location_file(location) =
+  apply(fun (a,b,c,d) a end, location)
+
+function location_row(location) =
+  apply(fun (a,b,c,d) b end, location)
+
+function location_column(location) =
+  apply(fun (a,b,c,d) c end, location)
+
+function location_position(location) =
+  apply(fun (a,b,c,d) d end, location)
+
+public function location_text(location) =
+  source_indicator(location_file(location),
+                   location_row(location),
+                   location_column(location),
+                   location_row(location),
+		   location_column(location) + 1)
+
+# ----------------------------------------------------------------------------
+# Range
+# ----------------------------------------------------------------------------
+
+public function make_range(from, to) =
+  tuple(from, to)
+
+public function no_range() =
+  make_range(no_location(), no_location())
+
+public function combine_ranges(from, to) =
+  make_range(range_from(from), range_to(to))
+
+function range_from(range) =
+  apply(fun (a,b) a end, range)
+
+function range_to(range) =
+  apply(fun (a,b) b end, range)
+
+public function range_text(range) =
+  source_indicator(location_file(range_from(range)),
+                   location_row(range_from(range)),
+                   location_column(range_from(range)),
+		   location_row(range_to(range)),
+		   location_column(range_to(range)))
+
+# ----------------------------------------------------------------------------
+# Source Indicator
+# ----------------------------------------------------------------------------
+
+function source_indicator(file, from_row, from_column, to_row, to_column) =
+  try
+      let
+          handle := open_input_file(file);
+          file_lines := file_lines(handle);
+          close_file(handle);
+          lines := [nth(from_row - 1, file_lines)];
+          i := from_row - 1;
+          while i < to_row - 1 do
+              i := i + 1;
+	      lines := cons(nth(i, file_lines), lines)
+          end
+      in
+          if from_row < to_row then
+              format("At lines $from to $to in file $file:\n$text\n",
+                     from := from_row;
+		     to := to_row;
+	             file := file;
+                     text := fold(fun (x,y) format("$x$y", x := x; y := y) end,
+		                  "",
+		                  map_list(fun (x) format("\n> $x", x := x) end, reverse(lines))))
+          else
+              let
+                  i := 0;
+                  indicator := "";
+                  while i != from_column do
+                      indicator := format("$x ", x := indicator);
+	              i := i + 1
+                  end;
+                  while i != to_column do
+                      indicator := format("$x^", x := indicator);
+	              i := i + 1
+                  end
+	      in
+                  format("At line $line in file $file:\n\n$text\n$ind",
+                         line := from_row;
+	                 file := file;
+                         text := first(lines);
+	                 ind := indicator)
+              end
+          end
+      end
+  catch(x)
+      try
+          format("At lines $from (pos = $x) to $to (pos = $y) in file $file",
+	         from := from_row;
+		 x := from_column;
+		 to := to_row;
+		 y := to_column;
+		 file := file)
+      catch(x)
+          "No source code location available."
+      end
+  end
+
+# ----------------------------------------------------------------------------
+# Errors with source code locations
+# ----------------------------------------------------------------------------
+
+public procedure throw_with_location(string, state, location) =
+  throw(format("\n$loc\n\n  $message\n",
+	       loc := location_text(location);
+	       message := format(string, state)))
+
+public procedure throw_with_range(string, state, range) =
+  throw(format("\n$loc\n\n  $message\n",
+	       loc := range_text(range);
+	       message := format(string, state)))

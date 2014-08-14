@@ -1,0 +1,99 @@
+# ----------------------------------------------------------------------------
+# Scheme Syntax Trees
+# ----------------------------------------------------------------------------
+
+module scheme_ast
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare scheme_atom :: (String) -> Sexp
+declare scheme_list :: (List(Sexp)) -> Sexp
+
+declare gen_scheme_var :: (String) -> Sexp
+
+declare scheme_false :: () -> Sexp
+declare scheme_true :: () -> Sexp
+declare scheme_empty_state :: () -> Sexp
+declare scheme_lambda :: (List(Sexp), Sexp) -> Sexp
+declare scheme_application :: (String, List(Sexp)) -> Sexp
+declare scheme_let :: (Sexp, Sexp, Sexp) -> Sexp
+declare scheme_if :: (Sexp, Sexp, Sexp) -> Sexp
+declare scheme_single_state :: (String, Sexp) -> Sexp
+declare scheme_lookup :: (String, Sexp) -> Sexp
+declare scheme_quoted :: (Sexp) -> Sexp
+
+# ----------------------------------------------------------------------------
+# Basic s-expressions
+# ----------------------------------------------------------------------------
+
+public function scheme_atom(string) = string
+
+public function scheme_list(items) = items
+
+public function gen_scheme_var(x) = scheme_atom(gen_string(x))
+
+# ----------------------------------------------------------------------------
+# Convenience functions
+# ----------------------------------------------------------------------------
+
+public function scheme_true() = scheme_atom("#t")
+
+public function scheme_false() = scheme_atom("#f")
+
+public function scheme_empty_state() = 
+  scheme_list([scheme_atom("empty-state")])
+
+public function scheme_quoted(x) = 
+  scheme_list([scheme_atom("quote"), x])
+
+public function scheme_application(name, args) =
+  scheme_list(cons(scheme_atom(name), args))
+
+public function scheme_single_state(name, exp) = 
+  scheme_application("singleton-state", [scheme_quoted(scheme_atom(name)), exp])
+
+public function scheme_lookup(name, exp) = 
+  scheme_application("lookup", [scheme_quoted(scheme_atom(name)), exp])
+
+public function scheme_lambda(args, body) =
+  scheme_list([scheme_atom("lambda"), args, body])
+
+public function scheme_let(name, exp, body) =
+  scheme_list([scheme_atom("let"), scheme_list([scheme_list([name, exp])]), body])
+
+public function scheme_if(condition, then_part, else_part) =
+  scheme_list([scheme_atom("if"), condition, then_part, else_part])
+
+# ----------------------------------------------------------------------------
+# Fresh String Generation
+# ----------------------------------------------------------------------------
+  
+define gen_counter = array_from_list([0])
+
+function gen_string(prefix) =
+  let
+      set(global gen_counter, 0, get(global gen_counter, 0) + 1)
+  in
+      format("l_$p$c", p := prefix; c := get(global gen_counter, 0))
+  end

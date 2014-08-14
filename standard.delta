@@ -1,0 +1,272 @@
+# ----------------------------------------------------------------------------
+# Standard Library for Delta
+# ----------------------------------------------------------------------------
+
+module standard
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare second :: forall t0: (List(t0)) -> t0
+declare third :: forall t0: (List(t0)) -> t0
+declare append :: forall t0: (List(t0), List(t0)) -> List(t0)
+declare reverse :: forall t0: (List(t0)) -> List(t0)
+declare is_member :: forall t0: (t0, List(t0)) -> Boole
+declare fold :: forall t0, t1, t2: ((t2, t1) -> t0, t2, List(t1)) -> t2
+declare map_list :: forall t0, t1, t2: ((t1) -> t0, List(t1)) -> List(t2)
+declare filter_list :: forall t0: ((t0) -> Boole, List(t0)) -> List(t0)
+declare nth :: forall t0: (Number, List(t0)) -> t0
+declare naturals :: (Number) -> List(Number)
+declare union :: forall t0: (List(t0), List(t0)) -> List(t0)
+declare intersection :: forall t0: (List(t0), List(t0)) -> List(t0)
+declare difference :: forall t0: (List(t0), List(t0)) -> List(t0)
+declare do_list :: forall t0: (List(t0), (t0) -> {}) -> {}
+
+declare replace_suffix :: (String, String) -> String
+declare intercalate :: forall t0: (List(String), t0) -> String
+
+declare min :: (Number, Number) -> Number
+declare max :: (Number, Number) -> Number
+
+declare swap :: forall t0: (Array(t0), Number, Number) -> Array(t0)
+declare do_times :: (Number, (Number) -> {}) -> {}
+declare do_array :: forall t0: (Array(t0), (t0) -> {}) -> {}
+declare array_sum :: (Array(Number)) -> Number
+
+# ----------------------------------------------------------------------------
+# List functions
+# ----------------------------------------------------------------------------
+
+public function second(x) = first(rest(x))
+
+public function third(x) = first(rest(rest(x)))
+
+public function append(x,y) =
+  let
+      xrev := reverse(x);
+      tmp := y;
+      while xrev != [] do
+          tmp := cons(first(xrev), tmp);
+          xrev := rest(xrev)
+      end
+  in
+      tmp
+  end
+  
+public function fold(f, x, xs) =
+  let 
+      folded := x;
+      while xs != [] do
+          folded := call(f, folded, first(xs));
+          xs := rest(xs)
+      end
+  in
+      folded
+  end
+
+public function reverse(x) = 
+  let
+      y := [];
+      while x != [] do
+          y := cons(first(x), y);
+          x := rest(x)
+      end
+  in
+      y
+  end
+
+public function is_member(element, list) =
+  if list = [] then
+      false
+  elsif element = first(list) then
+      true
+  else
+      is_member(element, rest(list))
+  end
+      
+
+public function map_list(fn, list) =
+  let
+      mapped := [];
+      while not(list = []) do
+          mapped := cons(call(fn, first(list)), mapped);
+          list := rest(list)
+      end
+  in
+      reverse(mapped)
+  end
+
+public function filter_list(fn, list) =
+  let
+      filtered := [];
+      while not(list = []) do
+          if call(fn, first(list)) then
+	      filtered := cons(first(list), filtered)
+          end;
+          list := rest(list)
+      end
+  in
+    reverse(filtered)
+  end
+
+public function nth(index, list) =
+  if index < 0 then
+      throw(format("Index $x for nth is negative", x := index))
+  else
+      let
+          i := index;
+          while i != 0 do
+              i := i - 1;
+              list := rest(list)
+          end 
+      in
+          if list = [] then
+              throw(format("Index $x for nth is out of range", x := index))
+          else
+              first(list)
+          end
+      end
+  end
+
+public function union(a,b) =
+  append(filter_list(fun (x) not(is_member(x,b)) end, a), b)
+
+public function intersection(a,b) =
+  filter_list(fun (x) is_member(x,b) end, a)
+
+public function difference(a,b) =
+  filter_list(fun (x) not(is_member(x,b)) end, a)
+
+public function naturals(n) =
+  let
+      numbers := [];
+      while n != 0 do
+        n := n - 1;
+        numbers := cons(n, numbers)
+      end
+  in
+      numbers
+  end
+
+public procedure do_list(xs, action) =
+  while xs != [] do
+      do call(action, first(xs)) end;
+      xs := rest(xs)
+  end
+
+#fun arrayToList(array) =
+#  list from
+#    n := arrayLength(array);
+#    list := [];
+#    i := n;
+#    while not (i = 0) do
+#       i := i - 1;
+#       list := get(array, i) : list
+#    end
+#
+#fun arrayFromList(list) = 
+#  array from
+#    n := listLength(list);
+#    array := makeArray(n);
+#    i := 0;
+#    while not (i = n) do
+#       set!(array, i, first(list)) &
+#       list := rest(list) &
+#       i := i + 1
+#    end
+
+# ----------------------------------------------------------------------------
+# String functions
+# ----------------------------------------------------------------------------
+
+public function replace_suffix(string, suffix) =
+  let
+      chars := characters(string);
+      shortened := [];
+      while chars != [] and first(chars) != \. do
+          shortened := cons(first(chars), shortened);
+	  chars := rest(chars)
+      end
+  in
+      format("$x$y", x := string(reverse(shortened)); y := suffix)
+  end
+
+public function intercalate(strings, delimiter) =
+  if strings = [] then
+      ""
+  else
+      let
+          calated := first(strings);
+	  strings := rest(strings);
+          while strings != [] do
+              calated := format("$cal$sep$new",
+	                        cal := calated;
+                                sep := delimiter;
+				new := first(strings));
+	      strings := rest(strings)
+	  end
+      in
+          calated
+      end
+  end
+
+# ----------------------------------------------------------------------------
+# Numerical functions
+# ----------------------------------------------------------------------------
+
+public function min(x,y) = if x < y then x else y end
+
+public function max(x,y) = if x > y then x else y end
+
+# ----------------------------------------------------------------------------
+# Array functions
+#----------------------------------------------------------------------------
+
+public procedure swap(array, i, j) = 
+  let tmp := get(array, i) in
+      set(array, i, get(array, j));
+      set(array, j, tmp)
+  end
+
+public procedure do_times(n, action) =
+  let i := n in
+      while i != 0 do
+          i := i - 1;
+	  do call(action, i) end
+      end
+  end
+
+public procedure do_array(array, action) =
+  do_times(array_length(array), action)
+
+public function array_sum(array) =
+  let 
+      sum := 0;
+      i := array_length(array);
+      while i != 0 do
+          i := i - 1;
+	  sum := sum + get(array, i)
+      end
+  in
+      sum
+  end

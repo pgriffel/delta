@@ -1,0 +1,646 @@
+# ----------------------------------------------------------------------------
+# Delta Parser
+# ----------------------------------------------------------------------------
+
+module parser
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+include token_stream, ast, location, config
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare read_module :: (String) -> Unit
+
+# ----------------------------------------------------------------------------
+# Reading a module and its toplevel definitions
+# ----------------------------------------------------------------------------
+
+public function read_module(name) =
+  let
+      stream := open_token_stream(name)
+  in
+      try
+          let
+	      unit := read_module_from_stream(stream);
+	      close_token_stream(stream)
+	  in
+	      unit
+	  end
+      catch(x)
+          close_token_stream(stream);
+          throw(x)
+      end
+  end
+
+function read_module_from_stream(stream) =
+  let 
+      header := read_header(stream);
+      includes := [];
+      types := [];
+      declarations := [];
+      elements := [];
+      while not(token_stream_eof(stream)) do 
+          let
+              is_public := false;
+	      range := token_range(peek_token(stream));
+	      key := read_identifier(stream);
+              if key = "public" then
+                  is_public := true;
+		  range := token_range(peek_token(stream));
+                  key := read_identifier(stream)
+              end
+          in
+              if key = "include" then
+                  includes := append(read_include(stream), includes)
+              elsif key = "type" then
+                  types := cons(read_type_definition(stream), types)
+              elsif key = "declare" then
+                  declarations := cons(read_declaration(stream), declarations)
+              else
+	          let def := if key = "define" then
+                                 read_definition(stream, is_public)
+                             elsif key = "function" then
+			         read_function(stream, is_public)
+                             elsif key = "procedure" then
+    			         read_procedure(stream, is_public)
+                             else
+                                 throw_with_range("Keyword $k is an unknown toplevel command", k := key, range)
+        		     end
+	          in
+                      elements := cons(def, elements)
+                  end
+              end
+          end
+      end
+  in
+      make_module(header, includes, reverse(elements))
+  end
+
+function read_header(stream) = 
+  let
+      do verify_key(stream, "module") end
+  in
+      read_identifier(stream)
+  end
+
+function read_include(stream) =
+  let
+      names := [read_identifier(stream)];
+      while token_value(peek_token(stream)) = \, do
+          skip_token(stream);
+          names := cons(read_identifier(stream), names)
+      end
+  in
+      reverse(names)
+  end  
+
+function read_declaration(stream) =
+  let
+      identifier := read_identifier(stream);
+      verify_operator(stream, "::");
+      expression := read_type_schema(stream)
+  in
+      name := identifier;
+      type_expression := expression
+  end
+
+function read_type_definition(stream) =
+  let
+      identifier := read_identifier(stream);
+      verify_operator(stream, "=");
+      expression := read_type_schema(stream)
+  in
+      name := identifier;
+      type_expression := expression
+  end
+  
+function read_definition(stream, is_public) =
+  let
+      identifier := read_identifier(stream);
+      verify_operator(stream, "=");
+      expression := read_expression(stream)
+  in
+      make_definition(identifier, expression, is_public)
+  end
+
+function read_function(stream, is_public) =
+  let
+      range := token_range(peek_token(stream));
+      identifier := read_identifier(stream);
+      tuple := read_tuple(stream, global read_identifier).value;
+      verify_operator(stream, "=");
+      expression := read_expression(stream);
+      exp_range := node_range(expression)
+  in
+      make_definition(identifier, make_abstraction(tuple, expression, combine_ranges(range, exp_range)), is_public)
+  end
+
+function read_procedure(stream, is_public) =
+  let
+      range := token_range(peek_token(stream));
+      identifier := read_identifier(stream);
+      tuple := read_tuple(stream, global read_identifier).value;
+      verify_operator(stream, "=");
+      expression := read_expression(stream);
+      exp_range := node_range(expression)
+  in
+      make_definition(identifier, make_abstraction(tuple, make_do(expression, exp_range), combine_ranges(range, exp_range)), is_public)
+  end
+
+# ----------------------------------------------------------------------------
+# Type Expressions
+# ----------------------------------------------------------------------------
+
+declare read_type_schema :: (Token_Stream) -> Type_Schema
+declare read_type_expression :: (Token_Stream) -> Type_Expression
+
+function read_type_schema(stream) =
+  if token_value(peek_token(stream)) = "forall" then
+      let skip_token(stream) in
+      if token_value(peek_token(stream)) = ":" then
+            let skip_token(stream) in
+          read_type_expression(stream)
+	  end
+      else
+          let
+	      id := read_identifier(stream);
+	      while token_value(peek_token(stream)) = \, do
+	          skip_token(stream);
+	          id := read_identifier(stream)
+              end;
+	      verify_operator(stream, ":")
+	  in
+	      read_type_expression(stream)
+	  end
+      end
+      end
+  else
+      read_type_expression(stream)
+  end
+
+function read_type_expression(stream) =
+  let
+      first := peek_token(stream)
+  in
+      if token_kind(first) = "identifier" then
+	  let
+	      id := read_identifier(stream);
+              next := peek_token(stream)
+	  in
+	      if next.value = \( then
+	          kind := "parametric_type";
+                  name := id;
+	          args := read_tuple(stream, global read_type_expression).value
+	      else
+	          kind := "parametric_type";
+	          name := id;
+		  args := []
+	      end
+	  end
+      elsif token_value(first) = \( then
+          let
+	      args := read_tuple(stream, global read_type_expression).value
+          in
+	      kind := "function_type";
+	      from := args;
+              verify_operator(stream, "->");
+	      to := read_type_expression(stream)
+	  end
+      elsif token_value(first) = \{ then
+          let
+	      skip_token(stream)
+	  in
+	      if token_value(peek_token(stream)) = \} then
+	          let skip_token(stream) in
+	              kind := "state type"
+		  end
+	      else
+	          throw("read_type_expression todo state type")
+	      end
+	  end
+      else
+          throw(format("read_type_expression todo: $val", val := token_value(first)))
+      end
+  end
+  
+# ----------------------------------------------------------------------------
+# Expressions
+# ----------------------------------------------------------------------------
+
+declare read_expression :: (Token_Stream) -> Expression
+
+function read_expression(stream) =
+  let
+      stack := [read_expression_item(stream)];
+      operator_follows := token_kind(peek_token(stream)) = "operator";
+      while operator_follows or rest(stack) != [] do
+          if not(operator_follows) then
+	      let
+	          left := third(stack);
+		  right := first(stack)
+	      in
+                  stack := cons(make_operation(left, second(stack), right, combine_node_ranges(left, right)),
+	                        rest(rest(rest(stack))))
+              end			    
+	  else
+	      let
+	          check_operator(peek_token(stream));
+	          range := token_range(peek_token(stream));
+                  op := token_value(next_token(stream));
+	          exp := read_expression_item(stream)
+	      in
+	          if rest(stack) = [] then
+	              stack := cons(exp, cons(op, stack))
+	          else
+	              let stack_op := second(stack) in
+                          while rest(stack) != [] and precedence_less(op, second(stack), range) do
+			      let
+			          left := third(stack);
+				  right := first(stack)
+			      in
+                                  stack := cons(make_operation(left, second(stack), right, combine_node_ranges(left, right)),
+	                                        rest(rest(rest(stack))))
+			      end
+                          end;
+		          stack := cons(exp, cons(op, stack))
+		      end
+                  end
+	      end 
+	  end;
+          operator_follows := token_kind(peek_token(stream)) = "operator"
+      end
+  in
+      first(stack)
+  end
+
+procedure check_operator(x) =
+  if not(is_operator(token_value(x))) then
+      throw_with_range("Operator $op does not exist", op := token_value(x), token_range(x))
+  end
+
+function precedence_less(x,y, range) =
+  let
+      px := precedence(x);
+      py := precedence(y)
+  in
+      if x = y then
+          if is_left_associative(x) then
+	      true
+	  elsif is_right_associative(x) then
+	      false
+	  else
+	      throw_with_range("Ambiguity: operator '$op' is not associative", op := x, range)
+	  end
+      elsif is_member(x, ["+", "-"]) and is_member(y, ["+", "-"]) then
+          true
+      elsif is_member(x, ["*", "/"]) and is_member(y, ["*", "/"]) then
+          true
+      elsif px = py then
+          throw_with_range("Ambiguity: operators '$a' and '$b' have the same precedence",
+                           a := x; b := y,
+			   range)
+      else
+          precedence(x) < precedence(y)
+      end
+  end
+
+function read_expression_item(stream) =
+  let 
+      next := peek_token(stream);
+      kind := token_kind(next);
+      value := token_value(next);
+      range := token_range(next)
+  in
+      if kind = "number" then
+          make_constant(read_number(stream), kind, range)
+      elsif kind = "string_literal" then
+          make_constant(read_string_literal(stream), "string", range)
+      elsif kind = "character_literal" then
+          make_constant(read_character_literal(stream), "character", range)
+      elsif kind = "Boole" then
+          make_constant(token_value(next_token(stream)), "Boole", range)
+      elsif kind = "identifier" then
+          read_identifier_and_rest(stream)
+      elsif kind = "operator" and is_member(value, ["-"]) then
+          let
+              operator := next_token(stream);
+              operand := read_expression_item(stream)
+          in
+              make_unary_operation(token_value(operator), operand, combine_node_ranges(operator, operand))
+          end
+      elsif value = \[ then
+          read_list_literal(stream)
+      elsif value = \( then
+          let
+	      skip_token(stream);
+	      exp := read_expression(stream);
+	      token := next_token(stream);
+	      value := token_value(token)
+          in
+              if value = \) then
+                  exp
+              else
+	          throw_with_range("expteced closing parenthesis but found $kind '$x'",
+		                   kind := token_kind(token); x := value, token_range(token))
+              end
+	  end
+      else
+          throw_with_range("$kind '$char' is not the start of an expression", 
+                           kind := kind;
+		           char := value,
+			   range)
+      end
+  end
+
+function read_identifier_and_rest(stream) =
+  let
+      next := token_value(peek_token(stream))
+  in
+      if next = "global" then
+          read_global(stream)
+      elsif next = "if" then
+          read_if(stream)
+      elsif next = "let" then
+          read_let(stream)
+      elsif next = "fun" then
+          read_abstraction(stream)
+      elsif next = "do" then
+          read_do(stream)
+      elsif next = "while" then
+          read_while(stream)
+      elsif next = "try" then
+          read_try(stream)
+      elsif next = "proc" then
+          read_do_abstraction(stream)
+      else
+          let
+	      token := peek_token(stream);
+	      identifier := read_identifier(stream);
+              next := token_value(peek_token(stream))
+          in
+              if next = \( then
+	          let
+		      tup := read_tuple(stream, global read_expression);
+                      args := tup.value;
+		      range := combine_ranges(token_range(token), tup.range)
+		  in
+		      if identifier = "call" then
+                          make_application("apply", [first(args), make_application("tuple", rest(args), tup.range)], range)
+		      else
+                          make_application(identifier, args, range) 
+		      end
+		  end
+              else
+                  make_variable(identifier, false, token_range(token))
+              end
+          end
+      end
+  end
+
+function last(x) = first(reverse(x))
+
+function read_global(stream) =
+  let token := verify_key(stream, "global") in
+      make_variable(read_identifier(stream), true, token_range(token))
+  end
+
+function read_do(stream) =
+  let
+      from := verify_key(stream, "do");
+      exp := read_expression(stream);
+      to := verify_key(stream, "end")
+  in
+      make_do(exp, combine_token_ranges(from, to))
+  end
+
+function read_while(stream) =
+  let
+      from := verify_key(stream, "while");
+      test := read_expression(stream);
+      do verify_key(stream, "do") end;
+      exp := read_expression(stream);
+      to := verify_key(stream, "end")
+  in
+      make_while(test, exp, combine_token_ranges(from, to))
+  end
+
+function read_try(stream) =
+  let
+      from := verify_key(stream, "try");
+      exp0 := read_expression(stream);
+      do verify_key(stream, "catch") end;
+      tuple := read_tuple(stream, global read_identifier).value;
+      exp1 := read_expression(stream);
+      to := verify_key(stream, "end")
+  in
+      make_try(exp0, first(tuple), exp1, combine_token_ranges(from, to))
+  end
+
+
+function read_if(stream) =
+  let
+      from := verify_key(stream, "if");
+      exp1 := read_expression(stream);
+      to := verify_key(stream, "then");
+      exp2 := read_expression(stream);      
+      exp3 := read_if_tail(stream)
+  in
+      make_if(exp1, exp2, exp3, combine_token_ranges(from, to))
+  end
+
+function read_if_tail(stream) =
+  let
+      range := token_range(peek_token(stream));
+      identifier := read_identifier(stream)
+  in
+      if identifier = "end" then
+          make_variable("skip", false, range)
+      elsif identifier = "elsif" then
+          let
+	      exp1 := read_expression(stream);
+              do verify_key(stream, "then") end;
+	      exp2 := read_expression(stream);
+	      tail := read_if_tail(stream)  
+	  in
+	      make_if(exp1, exp2, tail, combine_ranges(range, node_range(tail)))
+	  end
+      elsif identifier = "else" then
+          let
+	      exp := read_expression(stream);
+              do verify_key(stream, "end") end
+	  in
+	      exp
+	  end
+      else
+          throw_with_range("Expected keyword 'else' but found identifier '$id'", id := identifier, range)
+      end
+  end
+      
+function read_let(stream) =
+  let
+      from := verify_key(stream, "let");
+      exp1 := read_expression(stream);
+      do verify_key(stream, "in") end;
+      exp2 := read_expression(stream);
+      to := verify_key(stream, "end")
+  in
+      make_let(exp1, exp2, combine_token_ranges(from, to))
+  end
+
+function read_abstraction(stream) =
+  let
+      from := verify_key(stream, "fun");
+      args := read_tuple(stream, global read_identifier).value;
+      body := read_expression(stream);
+      to := verify_key(stream, "end")
+  in
+      make_abstraction(args, body, combine_token_ranges(from, to))
+  end
+
+function read_do_abstraction(stream) =
+  let
+      from := verify_key(stream, "proc");
+      args := read_tuple(stream, global read_identifier).value;
+      body := read_expression(stream);
+      to := verify_key(stream, "end")
+  in
+      make_abstraction(args, make_do(body, node_range(body)), combine_token_ranges(from, to))
+  end
+  
+# ----------------------------------------------------------------------------
+# Utilities
+# ----------------------------------------------------------------------------
+
+function combine_token_ranges(from, to) = combine_ranges(token_range(from), token_range(to))
+
+function combine_node_ranges(from, to) = combine_ranges(node_range(from), node_range(to))
+
+function read_identifier(stream) = token_value(read_kinded_token(stream, "identifier"))
+
+function read_character(stream) = token_value(read_kinded_token(stream, "character"))
+
+function read_number(stream) = token_value(read_kinded_token(stream, "number"))
+
+function read_string_literal(stream) = token_value(read_kinded_token(stream, "string_literal"))
+
+function read_character_literal(stream) = token_value(read_kinded_token(stream, "character_literal"))
+
+function read_operator(stream) = token_value(read_kinded_token(stream, "operator"))
+
+function verify_key(stream, key) =
+  let
+      token := next_token(stream);
+      identifier := token_value(token);
+      if identifier != key then
+          throw_with_range("Expected keyword '$key' but found $kind '$id'",
+                                 key := key; id := identifier; kind := token_kind(token),
+                                 token_range(token))
+      end
+  in
+      token
+  end
+
+procedure verify_operator(stream, operator) =
+      token := next_token(stream);
+      value := token_value(token);
+      kind := token_kind(token);
+      range := token_range(token);
+      if kind = "operator" then
+          if value != operator then
+              throw_with_range("Expected operator '$x' but found operator '$y'",
+                                     x := operator; y := value,
+                                     range)
+          end
+      else
+          throw_with_range("Expected operator '$op' but found $k '$v'",
+                                 op := operator; v := value; k := kind,
+                                 range)
+      end
+
+
+function read_list(stream, reader) =
+  let
+      items := [call(reader, stream)];
+      while token_value(peek_token(stream)) = \, do
+          skip_token(stream);
+          items := cons(call(reader, stream), items)
+      end
+  in
+      reverse(items)
+  end
+
+function read_list_literal(stream) =
+  let
+      open := next_token(stream);
+      items := [];
+      if token_value(peek_token(stream)) = \] then
+          close := next_token(stream)
+      else
+          items := [read_expression(stream)];
+          while token_value(peek_token(stream)) = \, do
+              skip_token(stream);
+              items := cons(read_expression(stream), items)
+	  end;
+	  close := next_token(stream)
+      end;
+      range := combine_token_ranges(open, close);
+      exp := make_application("empty_list", [], range);
+      while items != [] do
+          exp := make_application("cons", [first(items), exp], range);
+	  items := rest(items)
+      end
+  in
+      exp
+  end
+
+function read_tuple(stream, reader) =
+  let
+      open := next_token(stream)
+  in
+      if token_value(open) = \( then
+          if token_value(peek_token(stream)) = \) then
+	      let close := next_token(stream) in
+	          value := [];
+		  range := combine_token_ranges(open, close)
+	      end
+          else
+	      let
+	      items := read_list(stream, reader);
+              next := next_token(stream)
+	      in
+	      if token_value(next) = \) then
+	          value := items;
+		  range := combine_token_ranges(open, next)
+	      else
+	          throw_with_range("Expected a ')' to close the tuple but found $kind '$n'",
+                                         n := token_value(next); kind := token_kind(next),
+                                         combine_ranges(token_range(open), token_range(next)))
+              end
+	      end
+          end
+      else
+          throw_with_range("Expected a '(' to open a tuple but found $kind '$next'",
+                                 next := token_value(open); kind := token_kind(open), 
+                                 token_range(open))
+      end
+  end

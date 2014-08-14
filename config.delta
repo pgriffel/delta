@@ -1,0 +1,202 @@
+# ----------------------------------------------------------------------------
+# Delta Configuration
+# ----------------------------------------------------------------------------
+
+module config
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare is_operator_character :: (Char) -> Boole
+
+declare operator_name :: (String) -> String
+declare is_operator :: (String) -> Boole
+declare precedence :: (String) -> Number
+declare is_left_associative :: (String) -> Boole
+declare is_right_associative :: (String) -> Boole
+
+declare is_primitive :: (String) -> Boole
+declare is_primitive_function :: (String) -> Boole
+declare is_primitive_procedure :: (String) -> Boole
+
+declare is_standard :: (String) -> Boole
+declare is_standard_function :: (String) -> Boole
+declare is_standard_procedure :: (String) -> Boole
+
+declare is_system_module :: (String) -> Boole
+
+# ----------------------------------------------------------------------------
+# Lexing Operator
+# ----------------------------------------------------------------------------
+
+define operator_characters = characters(".~`!@#$%^&*+=-|;:/?<>")
+
+public function is_operator_character(x) = 
+  is_member(x, global operator_characters)
+
+# ----------------------------------------------------------------------------
+# Operator Parsing
+#
+# Globals assoc_left and assoc_right determine how the parser resolves
+# ambiguity of the same binary infix operator.
+#
+# Global precedence_table determinces how the parser resolves
+# ambibuity between different binary infix operators.
+#
+# Further, the parser considers a token an operation if and only if it
+# appears in the precedence table.
+# ----------------------------------------------------------------------------
+
+define assoc_left = ["*", "+", "-", "/", "."]
+define assoc_right = [":=", ";", "|", "&", "and", "or"]
+
+define precedence_table =
+  [[";", "|", "&"],
+   [":="],
+   ["and", "or"],
+   ["=", "!=", "<", ">", "<=", ">="],
+   ["+", "-"],
+   ["*", "/"],
+   ["^"],
+   ["."]] 
+
+public function is_left_associative(x) = 
+  is_member(x, global assoc_left)
+
+public function is_right_associative(x) = 
+  is_member(x, global assoc_right)
+
+public function is_operator(x) = is_member(x, global operators)
+
+define operators = 
+  fold(global append, [], global precedence_table)
+
+public function precedence(x) =
+  let
+      precedence := 0;
+      table := global precedence_table;
+      found := false;
+      while not(found) and table != [] do
+          if is_member(x, first(table)) then
+	      found := true
+          else
+	      table := rest(table);
+	      precedence := precedence + 1
+	  end
+      end;
+      if not(found) then
+          throw(format("operator $op unknown when asked for precedence", op := x))
+      end
+  in
+      precedence  
+  end
+
+# ----------------------------------------------------------------------------
+# Primitives Info
+# ----------------------------------------------------------------------------
+
+define primitive_functions = 
+  ["apply", "tuple", "merge", "equal", "not_equal", "greater", "less", "not",
+   "sum", "multiply", "minus", "neg", "divide", "mod", "div", "expt", "exp", "sqrt",
+   "ask_line", "read_num", "format",
+   "empty_list", "cons", "first", "rest", "list_length",
+   "array_from_list", "make_array", "array_length", "get",
+   "concatenate", "split_string",
+   "listen_on", "accept", "connect_to", "receive_from",
+   "open_channel", "receive", "channel_name",
+   "make_semaphore", 
+   "open_input_file", "open_output_file", "read_char", "peek_char", "eof", "whitespace", "alphabetic", "numeric",
+   "string", "characters",
+   "file_position", "file_range", "file_lines",
+   "home_dir",
+   "make_window", "random_integer", "random", "round", "floor", "ceiling", "now", "color", "rgb"]
+
+define primitive_procedures = 
+  ["print", "print_line", "write", "write_line",
+   "throw", "set", "sleep", "send_to", "close", "send", 
+   "up", "down", "run_shell_command", "close_file",
+   "draw_point", "draw_line", "draw_rectangle", "draw_ellipse", "refresh", "set_background"]
+
+define standard_functions =
+  ["second", "third", "append", "fold", "reverse", "is_member", "map_list", "filter_list", "nth",
+   "union", "intersection", "difference",
+   "replace_suffix", "intercalate", "min", "max",
+   "array_sum", "naturals"]
+
+define standard_procedures =
+  ["swap", "do_times", "do_array", "do_list"]
+
+public function is_primitive(x) = is_primitive_function(x) or is_primitive_procedure(x)
+
+public function is_primitive_function(x) = is_member(x, global primitive_functions)
+
+public function is_primitive_procedure(x) = is_member(x, global primitive_procedures)
+
+public function is_standard(x) = is_standard_function(x) or is_standard_procedure(x)
+
+public function is_standard_function(x) = is_member(x, global standard_functions)
+
+public function is_standard_procedure(x) = is_member(x, global standard_procedures)
+
+# ----------------------------------------------------------------------------
+# Operators Info
+# ----------------------------------------------------------------------------
+
+define operator_names = 
+  [["+", "sum"],
+   ["-", "minus"],
+   ["*", "multiply"],
+   ["*", "multiply"],
+   ["/", "divide"],
+   ["^", "expt"],
+   ["=", "equal"],
+   ["!=", "not_equal"],
+   [">", "greater"],
+   ["<", "less"],
+   ["and", "and"],
+   ["or", "or"]]
+
+public function operator_name(op) =
+  let
+      names := global operator_names;
+      while names != [] and first(first(names)) != op do
+          names := rest(names)
+      end
+  in
+      if names = [] then
+          throw(format("operator $op not found in operator_names table", op := op))
+      else
+          second(first(names))
+      end
+  end
+
+# ----------------------------------------------------------------------------
+# System Modules
+#
+# All system modules must be in this list. The compiler uses the list
+# to generate the proper requires.
+# ----------------------------------------------------------------------------
+
+define system_modules = ["io", "channel", "semaphore", "socket", "gui"]
+
+public function is_system_module(x) = is_member(x, global system_modules)

@@ -1,0 +1,750 @@
+# ----------------------------------------------------------------------------
+# Delta Syntax Trees
+# ----------------------------------------------------------------------------
+
+module ast
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+include scheme_ast, location, config
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare make_module :: (String, List(String), List(Definition)) -> Unit
+declare module_name :: (Unit) -> String
+declare module_includes :: (Unit) -> List(String)
+declare module_definitions :: (Unit) -> List(Definition)
+
+declare make_definition :: (String, Expression, Boole) -> Definition
+declare definition_name :: (Definition) -> String
+declare definition_body :: (Definition) -> Expression
+declare definition_is_public :: (Definition) -> Boole
+declare is_procedure_definition :: (Definition) -> Boole
+
+declare make_variable :: (String, Boole, Range) -> Expression
+declare make_constant :: (String, String, Range) -> Expression
+declare make_abstraction :: (List(String), Expression, Range) -> Expression
+declare make_application :: (String, List(Expression), Range) -> Expression
+declare make_operation :: (Expression, String, Expression, Range) -> Expression
+declare make_if :: (Expression, Expression, Expression, Range) -> Expression
+declare make_do :: (Expression, Range) -> Expression
+declare make_let :: (Expression, Expression, Range) -> Expression
+declare make_while :: (Expression, Expression, Range) -> Expression
+declare make_try :: (Expression, String, Expression, Range) -> Expression
+declare make_state_deref :: (Expression, String, Range) -> Expression
+
+declare pretty :: (Expression) -> String
+declare scheme_string :: (Expression) -> String
+declare node_range :: (Expression) -> Range
+declare scope_violations :: (Expression, List(String), List(String)) -> List(Expression)
+declare assigned :: (Expression, List(String)) -> List(String)
+declare is_do :: (Expression) -> Boole
+declare is_procedure :: (Expression) -> Boole
+
+# ----------------------------------------------------------------------------
+# Module
+# ----------------------------------------------------------------------------
+
+public function make_module(x, y, z) =
+  name := x;
+  includes := y;
+  elements := z
+
+public function module_name(x) = x.name
+
+public function module_includes(x) = x.includes
+
+public function module_definitions(x) = x.elements
+
+# ----------------------------------------------------------------------------
+# Definition
+# ----------------------------------------------------------------------------
+
+public function make_definition(x, y, z) =
+  name := x;
+  body := y;
+  is_public := z
+
+public function definition_name(x) = x.name
+
+public function definition_body(x) = x.body
+
+public function definition_is_public(x) = x.is_public
+
+public function is_procedure_definition(x) = is_procedure(definition_body(x))
+
+# ----------------------------------------------------------------------------
+# Expression Methods
+# ----------------------------------------------------------------------------
+
+declare gen_scheme_code :: (Expression, Sexp) -> Sexp
+declare scheme_code :: (Expression, Sexp, Sexp, Sexp, Sexp) -> Sexp
+
+public function scheme_string(x) =
+  format("$exp", exp := gen_scheme_code(x, scheme_empty_state()))
+
+public function pretty(x) = call(x.pretty, x)
+
+function gen_scheme_code(exp, state) =
+  scheme_code(exp, state, scheme_false(), scheme_false(), scheme_false())
+
+function scheme_code(exp, state, prior, doing, link) =
+   call(exp.scheme_code, exp, state, prior, doing, link)
+
+public function node_range(x) = x.range
+
+public function scope_violations(x, locals, globals) =
+  call(x.scope_violations, x, locals, globals)
+
+public function assigned(x, certain, globals) =
+  call(x.assigned, x, certain, globals)
+
+public function is_do(x) = call(x.is_do, x)
+
+public function is_procedure(x) = call(x.is_procedure, x)
+
+# ----------------------------------------------------------------------------
+# Constant
+# ----------------------------------------------------------------------------
+
+public function make_constant(x, y, z) =
+  value := x;
+  kind := y;
+  range := z;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned := fun (this, certain, globals) [] end;
+  scope_violations := fun (this, locals, globals) [] end;
+  scheme_code := 
+      fun (this, state, prior, doing, link)
+          let
+	      value := if this.kind = "string" then
+		           scheme_atom(format("$c$v$c", v := this.value; c := \"))
+                       elsif this.kind = "character" then
+		           if this.value = "eof" then
+			       scheme_atom("eof")
+			   else
+		               scheme_atom(format("#$c$v", v := this.value; c := \\))
+			   end
+                       elsif this.kind = "Boole" then
+		           if this.value = "true" then
+			       scheme_true()
+                           elsif this.value = "false" then
+			       scheme_false()
+			   else
+			       throw(format("Value $x is not a valid Boole contant", x := value))
+			   end
+                       elsif this.kind = "number" then
+                           scheme_atom(this.value)
+		       else
+                           throw(format("Kind $x is not a valid contant", x := this.kind))
+                       end
+	  in
+              result_code(value, prior, doing, link)
+	  end
+      end;
+  pretty := fun (this)
+                if this.kind = "string" then
+		    format("$c$v$c", v := this.value; c := \")
+                elsif this.kind = "character" then
+		    format("$c$v", v := this.value; c := \\)
+		else
+                    this.value
+                end
+            end
+
+# ----------------------------------------------------------------------------
+# Variable
+# ----------------------------------------------------------------------------
+
+public function make_variable(x, y, z) =
+  name := x;
+  is_global := y;
+  range := z;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned := 
+      fun (this, certain, globals)
+      	  if this.name = "skip" then
+	      []
+          else
+	      throw_with_range("Cannot use a variable as a statement becaues this makes the state statically uncertain.", skip, this.range)
+	  end
+      end;
+  scope_violations := 
+      fun (this, locals, globals)
+          if if this.is_global then
+	         is_primitive(this.name) or
+		 is_standard(this.name) or
+                 let
+		     unsearched := globals;
+	             while unsearched != [] and definition_name(first(unsearched)) != this.name do
+		         unsearched := rest(unsearched)
+	             end
+	         in
+                     unsearched != [] 
+	         end
+             else
+	         is_member(this.name, locals)
+	     end
+          then
+	      []
+	  else
+              [this]
+	  end
+      end;
+  scheme_code := 
+      fun (this, state, prior, doing, link)
+          let
+	      name := this.name
+          in
+              result_code(if name = "skip" then
+	                      scheme_empty_state()
+	                  elsif this.is_global then
+		              scheme_atom(delta_name(name))
+                          else
+			      scheme_lookup(local_name(name), state)
+                          end, 
+                          prior, doing, link)
+          end
+      end;
+  pretty := 
+      fun (this) 
+          format("$mod$name", 
+                 mod := if this.is_global then "global " else "" end; 
+                 name := this.name) 
+      end
+
+# ----------------------------------------------------------------------------
+# Abstraction
+# ----------------------------------------------------------------------------
+
+public function make_abstraction(x, y, z) =
+  args := x;
+  body := y;
+  range := z;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) is_do(this.body) end;
+  assigned := fun (this, certain, globals) [] end;
+  scope_violations := 
+      fun (this, locals, globals)
+          scope_violations(this.body, union(locals, this.args), globals)
+      end;
+  scheme_code := 
+      fun (this, state, prior, doing, link)
+          let
+              renamed := map_list(global local_name, this.args);
+              params := renamed;
+              pairs := [];
+              while params != [] do
+                  let atom := scheme_atom(first(params)) in
+                      pairs := cons(atom, cons(scheme_quoted(atom), pairs));
+                      params := rest(params)
+                  end
+              end;
+              s := gen_scheme_var("s");
+              p := gen_scheme_var("p");
+              d := gen_scheme_var("d");
+              l := gen_scheme_var("l")
+          in
+              scheme_lambda(append([p, d, l], renamed),
+                scheme_let(s, scheme_merge_state(state, scheme_list(cons(scheme_atom("state"), reverse(pairs)))),
+                  scheme_code(this.body, s, p, d, l)))
+          end
+      end;
+  pretty := 
+      fun (this)
+          format("fun ($x) $y end", 
+                 x := intercalate(this.args, ", ");
+                 y := pretty(this.body))
+      end
+
+# ----------------------------------------------------------------------------
+# Application
+# ----------------------------------------------------------------------------
+
+public function make_application(x, y, z) =
+  name := x;
+  args := y;
+  range := z;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned := 
+      fun (this, certain, globals)
+          if 
+              if is_primitive(this.name) then
+	          is_primitive_procedure(this.name)
+              elsif is_standard(this.name) then
+	          is_standard_procedure(this.name)
+	      else
+	          let
+	              unsearched := globals; 
+	              while unsearched != [] and definition_name(first(unsearched)) != this.name do
+		          unsearched := rest(unsearched)
+	              end
+	          in
+	              unsearched != [] and is_procedure_definition(first(unsearched))
+	          end
+              end
+          then
+	      []
+	  else
+              throw_with_range("Cannot use a function application as a statement because this makes the state statically uncertain. 
+
+  Consider using a procedure or makig a 'do .. end' construction",
+	                       skip, this.range)
+          end
+      end;
+  scope_violations := 
+      fun (this, locals, globals) 
+          fold(global union,
+	       # let op: dure map
+               if is_primitive(this.name) or
+	          is_standard(this.name) or
+	          is_member(this.name, map_list(global definition_name, globals)) then 
+                   []
+               else
+                   [make_variable(this.name, true, this.range)] 
+               end, 
+               map_list(fun (x) scope_violations(x,locals, globals) end, this.args))
+      end;
+  scheme_code := 
+      fun (this, state, prior, doing, link)
+          let
+	      name := this.name;
+              args_code := map_list(fun(x) gen_scheme_code(x, state) end, this.args)
+	  in
+              if is_primitive(name) and name != "apply" then
+                  result_code(scheme_application(delta_name(name), args_code), prior, doing, link)
+              else
+                  scheme_application(delta_name(name), append([prior, doing, link], args_code))
+              end
+          end
+      end;
+  pretty := fun (this) 
+                format("$id($args)", 
+                       id := this.name;
+                       args := intercalate(map_list(global pretty, this.args), ", ")) 
+            end
+
+# ----------------------------------------------------------------------------
+# Operation
+# ----------------------------------------------------------------------------
+
+public function make_operation(x, op, y, range) =
+  if op = "and" then
+      make_if(x, y, make_constant("false", "Boole", range), range)
+  elsif op = "or" then
+      make_if(x, make_constant("true", "Boole", range), y, range)
+  elsif op = "." then
+      make_state_deref(x, y.name, range)
+  elsif op = "<=" then
+      make_operation(make_operation(x, "<", y, range), "or", make_operation(x, "=", y, range), range)
+  elsif op = ">=" then
+      make_operation(make_operation(x, ">", y, range), "or", make_operation(x, "=", y, range), range)
+  else
+      operator := op;
+      left := x;
+      right := y;
+      range := range;
+      is_do := fun (this) false end;
+      is_procedure := fun (this) false end;
+      assigned :=
+          fun (this, certain, globals)
+              let 
+	          op := this.operator
+	      in
+                  if op = ":=" then
+	              [this.left.name]
+	          else
+		      union(assigned(this.left, certain, globals), assigned(this.right, certain, globals))
+	          end
+              end
+          end;
+      scope_violations := 
+          fun (this, locals, globals)
+	      let 
+	          op := this.operator
+	      in
+                  if op = ":=" then
+	              scope_violations(this.right, locals, globals)
+                  elsif op = ";" then 
+		      union(scope_violations(this.left, locals, globals),
+                            scope_violations(this.right, union(assigned(this.left, true, globals), locals), globals))
+                  elsif op = "|" then
+		      union(scope_violations(this.left, locals, globals),
+                            scope_violations(this.right, locals, globals))
+                  elsif op = "&" then
+		      union(scope_violations(this.left, locals, globals),
+                            scope_violations(this.right, locals, globals))
+	          else
+		      union(scope_violations(this.left, locals, globals),
+                            scope_violations(this.right, locals, globals))
+	          end
+              end
+          end;
+      scheme_code := 
+          fun (this, state, prior, doing, link)
+              let
+	          op := this.operator
+	      in
+                  if op = ":=" then
+	              assignment_scheme_code(this, state, prior, doing, link)
+                  elsif op = ";" then
+                      seq_scheme_code(this, state, prior, doing, link)
+                  elsif op = "|" then
+                      par_scheme_code(this, state, prior, doing, link)
+                  elsif op = "&" then
+                      ind_scheme_code(this, state, prior, doing, link)
+	          else
+                      scheme_code(make_application(operator_name(this.operator),
+                                                   [this.left, this.right], range), state, prior, doing, link)
+	          end
+              end
+          end;
+      pretty := 
+          fun (this) 
+              format("($x $op $y)", 
+                     op := this.operator;
+                     x := pretty(this.left);
+                     y := pretty(this.right)) 
+          end
+  end
+
+public function make_unary_operation(operator, operand, range) =
+  if operator = "-" then
+      make_application("neg", [operand], range)
+  else
+      throw(format("unary operator $op unknown", op := operator))
+  end
+
+function par_scheme_code(this, state, prior, doing, link) =
+  let
+      l1 := gen_scheme_var("l");
+      l2 := gen_scheme_var("l");
+      left_code := scheme_code(this.left, state, prior, doing, l1);
+      right_code := scheme_code(this.right, state, scheme_false(), doing, l2)
+  in
+      scheme_application("para", [scheme_lambda([l1], left_code),
+	                          scheme_lambda([l2], right_code),
+	                          link])
+  end
+
+function seq_scheme_code(this, state, prior, doing, link) =
+  let
+      st1 := gen_scheme_var("s");
+      st2 := gen_scheme_var("s");
+      st3 := gen_scheme_var("s");
+      left_code := gen_scheme_code(this.left, state);
+      right_code := scheme_code(this.right, st2, st3, doing, link)
+  in
+      scheme_let(st1, left_code, 
+        scheme_let(st2, scheme_merge_state(state, st1),
+          scheme_let(st3, result_code(st1, prior, doing, scheme_false()), right_code)))
+  end
+  
+function ind_scheme_code(this, state, prior, doing, link) =
+  let
+      st1 := gen_scheme_var("s");
+      left_code := scheme_code(this.left, state, prior, doing, scheme_false());
+      right_code := scheme_code(this.right, state, st1, doing, link)
+  in
+      scheme_let(st1, left_code, right_code)
+  end
+
+function assignment_scheme_code(this, state, prior, doing, link) =
+  result_code(scheme_single_state(local_name(this.left.name), gen_scheme_code(this.right, state)),
+	      prior, doing, link)
+
+# ----------------------------------------------------------------------------
+# If
+# ----------------------------------------------------------------------------
+  
+public function make_if(x, y, z, range) =
+  condition := x;
+  then_part := y;
+  else_part := z;
+  range := range;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned :=
+      fun (this, certain, globals)
+          call(if certain then global intersection else global union end,
+	       assigned(this.then_part, certain, globals),
+	       assigned(this.else_part, certain, globals))
+      end;
+  scope_violations := 
+      fun (this, locals, globals) 
+          union(scope_violations(this.condition, locals, globals),
+                union(scope_violations(this.then_part, locals, globals),
+                      scope_violations(this.else_part, locals, globals)))
+      end;
+  scheme_code := fun (this, state, prior, doing, link)
+                     scheme_if(gen_scheme_code(this.condition, state),
+                               scheme_code(this.then_part, state, prior, doing, link),
+                               scheme_code(this.else_part, state, prior, doing, link))
+	         end;
+  pretty := fun (this)
+                format("if $x then $y else $z end",
+                       x := pretty(this.condition);
+                       y := pretty(this.then_part);
+                       z := pretty(this.else_part))
+              end
+
+# ----------------------------------------------------------------------------
+# Do
+# ----------------------------------------------------------------------------
+
+public function make_do(x, range) =
+  body := x;
+  range := range;
+  is_do := fun (this) true end;
+  is_procedure := fun (this) false end;
+  assigned := fun (this, certain, globals) [] end;
+  scope_violations := 
+      fun (this, locals, globals)
+          scope_violations(this.body, locals, globals)
+      end;
+  scheme_code := fun (this, state, prior, doing, link)
+                     scheme_code(this.body, state, prior, scheme_true(), link)
+	         end;
+  pretty := fun (this)
+                format("do $x end", x := pretty(this.body)) 
+            end
+
+# ----------------------------------------------------------------------------
+# While
+# ----------------------------------------------------------------------------
+
+public function make_while(x, y, range) =
+  test := x;
+  body := y;
+  range := range;  
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned :=
+      fun (this, certain, globals)
+          if certain then [] else assigned(this.body, certain, globals) end
+      end;
+  scope_violations := 
+      fun (this, locals, globals)
+          union(scope_violations(this.test, locals, globals),
+                scope_violations(this.body, locals, globals))
+      end;
+  scheme_code := fun (this, state, prior, doing, link)
+                     let
+		         s0 := gen_scheme_var("s");
+			 s1 := gen_scheme_var("s");
+			 s2 := gen_scheme_var("s")
+	             in
+                         scheme_let(s0, scheme_empty_state(),
+                           scheme_let(s1, state,
+                             scheme_application("begin",
+			       [scheme_application("while", 
+                                  [gen_scheme_code(this.test, s1),
+				    scheme_let(s2, gen_scheme_code(this.body, s1),
+				     scheme_application("begin",
+				       [scheme_application("set!", [s0, scheme_merge_state(s0, s2)]),
+				        scheme_application("set!", [s1, scheme_merge_state(s1, s2)])]))]),
+                                result_code(s0, prior, doing, link)])))
+		     end
+                 end;
+  pretty := fun (this) 
+                format("while $x do $y end",
+                       x := pretty(this.test);
+		       y := pretty(this.body)) 
+            end
+
+# ----------------------------------------------------------------------------
+# Try
+# ----------------------------------------------------------------------------
+
+public function make_try(x, y, z, range) =
+  body := x;
+  var := y;
+  range := range;  
+  handler := z;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned :=
+      fun (this, certain, globals)
+          call(if certain then global intersection else global union end,
+	       assigned(this.body, certain, globals),
+	       assigned(this.handler, certain, globals))
+      end;
+  scope_violations := 
+      fun (this, locals, globals)
+          union(scope_violations(this.body, locals, globals),
+                scope_violations(this.handler, union([this.var], locals), globals))
+      end;
+  scheme_code := 
+      fun (this, state, prior, doing, link)
+          let
+	      st := gen_scheme_var("s");
+	      name := local_name(this.var);
+	      name_atom := scheme_atom(name);
+	      handler := scheme_lambda([name_atom],
+ 		           scheme_let(st, scheme_merge_state(state,
+                                                             scheme_single_state(name, scheme_application("exn-message", [name_atom]))),
+			     gen_scheme_code(this.handler, st)))
+	  in
+	      result_code(
+                  scheme_application("try-catch", [scheme_lambda([], gen_scheme_code(this.body, state)), handler]),
+                  prior, doing, link)
+          end
+      end;
+  pretty := 
+      fun (this) 
+          format("try $x catch ($y) $z end", 
+                 x := pretty(this.body);
+                 y := this.var;
+		 z := pretty(this.handler))
+      end
+
+# ----------------------------------------------------------------------------
+# Let
+# ----------------------------------------------------------------------------
+
+public function make_let(x, y, range) =
+  binding := x;
+  body := y;
+  range := range;
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned :=
+      fun (this, certain, globals)
+          assigned(this.body, certain, globals)
+      end;
+  scope_violations := 
+      fun (this, locals, globals)
+          union(scope_violations(this.binding, locals, globals),
+                scope_violations(this.body, union(assigned(this.binding, true, globals), locals), globals))
+      end;
+  scheme_code := fun (this, state, prior, doing, link)
+                     let st := gen_scheme_var("s") in
+                         scheme_let(st, scheme_merge_state(state, gen_scheme_code(this.binding, state)),
+                           scheme_code(this.body, st, prior, doing, link))
+		     end
+	         end;
+  pretty := fun (this)
+                format("let $x in $y end", 
+                       x := pretty(this.binding); 
+                       y := pretty(this.body))
+            end
+
+# ----------------------------------------------------------------------------
+# State Deref
+# ----------------------------------------------------------------------------
+
+public function make_state_deref(x, y, range) =
+  body := x;
+  name := y;
+  range := range;  
+  is_do := fun (this) false end;
+  is_procedure := fun (this) false end;
+  assigned := fun (this, certain, globals) [] end;
+  scope_violations := 
+      fun (this, locals, globals) 
+          union(scope_violations(this.body, locals, globals),
+                [])
+      end;
+  scheme_code :=
+      fun (this, state, prior, doing, link)
+          result_code(scheme_lookup(local_name(this.name),
+                                    gen_scheme_code(this.body, state)),
+                      prior, doing, link)
+      end;
+  pretty := fun (this) 
+                format("$exp.$var", 
+                       exp := pretty(this.body); 
+                       var := this.name) 
+            end
+
+# ----------------------------------------------------------------------------
+# Compiler Utilities
+# ----------------------------------------------------------------------------
+
+function result_code(code, prior, doing, link) =
+  if link = scheme_false() then
+      result_code2(code, prior, doing, link)
+  else
+      let
+          tmp := gen_scheme_var("t")
+      in
+          scheme_let(tmp, result_code2(code, prior, doing, link),
+	    scheme_if(link,
+              scheme_application("leave-collective", [link, tmp]),
+	      tmp))
+      end
+  end
+
+function result_code2(code, prior, doing, link) =
+  let
+      tmp := gen_scheme_var("t");
+      pr := gen_scheme_var("p")
+  in
+      if prior = scheme_false() and doing = scheme_false() then
+          code
+      elsif prior = scheme_false() and doing = scheme_true() then
+          scheme_let(tmp, code, scheme_empty_state())
+      elsif prior = scheme_false() then
+          scheme_let(tmp, code, scheme_if(doing, scheme_empty_state(), tmp))
+      elsif doing = scheme_false() then
+          scheme_merge_state(scheme_application("or", [prior, scheme_empty_state()]), code)
+      elsif doing = scheme_true() then
+          scheme_let(tmp, code, scheme_application("or", [prior, scheme_empty_state()]))
+      else
+          scheme_let(tmp, code,
+             scheme_let(pr, prior,
+      	       scheme_if(pr,
+                        scheme_merge_state(pr, scheme_if(doing, scheme_empty_state(), tmp)),
+	                scheme_if(doing, scheme_empty_state(), tmp))))
+      end
+  end
+
+function scheme_merge_state (x, y) =
+  if x = scheme_empty_state() then
+      y
+  elsif y = scheme_empty_state() then
+      x
+  else
+      scheme_application("merge-state", [x, y])
+  end
+
+function delta_name(x) =
+  if x = "not" then
+      "not"
+  elsif x = "equal" then
+      "equal?"
+  elsif x = "sum" then
+      "+"
+  elsif x = "minus" then
+      "-"
+  elsif x = "multiply" then
+      "*"
+  elsif x = "divide" then
+      "/"
+  else
+      format("d_$name", name := x)
+  end
+
+function local_name(x) = format("l_$name", name := x)

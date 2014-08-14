@@ -1,0 +1,329 @@
+# ----------------------------------------------------------------------------
+# Token Streams
+# ----------------------------------------------------------------------------
+
+module token_stream
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+include io, location, config
+
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare open_token_stream :: (String) -> Token_Stream
+declare close_token_stream :: (Token_Stream) -> {}
+
+declare next_token :: (Token_Stream) -> Token
+declare peek_token :: (Token_Stream) -> Token
+declare skip_token :: (Token_Stream) -> {}
+declare read_kinded_token :: (Token_Stream, String) -> Token
+declare token_stream_eof :: (Token_Stream) -> Boole
+declare stream_location :: (Token_Stream) -> Location
+
+declare token_kind :: (Token) -> String
+declare token_value :: (Token) -> String
+declare token_range :: (Token) -> Range
+
+# ----------------------------------------------------------------------------
+# Token Streams
+#
+# Builds a token stream from a character stream
+# ----------------------------------------------------------------------------
+
+declare make_token_stream :: (Handle, String) -> Token_Stream
+
+function make_token_stream(handle, file) =
+  let 
+      cell := make_array(1);
+      stream := tuple(handle, cell, file);
+      set(cell, 0, read_token(stream))
+  in
+      stream
+  end
+
+function token_stream_handle(stream) = 
+  apply(fun (a,b,c) a end, stream)
+
+function token_stream_token_cell(stream) = 
+  apply(fun (a,b,c) b end, stream)
+
+function token_stream_file(stream) = 
+  apply(fun(a,b,c) c end, stream)
+
+public function open_token_stream(name) =
+  make_token_stream(open_input_file(name), name)
+
+public procedure close_token_stream(stream) = 
+  close_file(token_stream_handle(stream))
+
+public function next_token(stream) = 
+  let
+      cell := token_stream_token_cell(stream);
+      token := get(cell, 0);
+      set(cell, 0, read_token(stream))
+  in
+      token 
+  end
+
+public function peek_token(stream) = 
+  get(token_stream_token_cell(stream), 0)
+
+public function token_stream_eof(stream) = 
+  token_kind(peek_token(stream)) = "end"
+
+function stream_location(stream) = 
+  apply(fun (x,y,z) make_location(token_stream_file(stream), x, y, z) end, 
+        file_position(token_stream_handle(stream)))
+
+declare read_token :: (stream) -> Token
+
+function read_token(stream) =
+  let 
+      handle := token_stream_handle(stream);
+      next := peek_next_char(handle);
+      start := stream_location(stream)
+  in
+      if next = \eof then
+          kind := "end";
+	  value := "end"
+      elsif numeric(next) then      
+          kind := "number";
+          value := read_number_token(stream)
+      elsif next = \" then
+          kind := "string_literal";
+          value := read_string_token(stream)
+      elsif next = \\ then
+          kind := "character_literal";
+          value := read_character_token(stream)
+      elsif next = \_ or alphabetic(next) then
+          let
+	      id := read_identifier_token(stream)
+	  in
+	      if id = "true" then
+	          kind := "Boole";
+		  value := "true"
+	      elsif id = "false" then
+	          kind := "Boole";
+		  value := "false"
+ 	      elsif id = "and" then
+	          kind := "operator";
+		  value := "and"
+ 	      elsif id = "or" then
+	          kind := "operator";
+		  value := "or"
+	      else
+                  kind := "identifier";
+                  value := id
+              end
+	  end
+      elsif is_operator_character(next) then
+          kind := "operator";
+          value := read_operator_token(stream)
+      else
+          value := next_char(handle);
+          kind := "character"
+      end;
+      range := make_range(start, stream_location(stream))
+  end
+
+public function token_kind(token) = token.kind
+
+public function token_value(token) = token.value
+
+public function token_range(token) = token.range
+
+public function read_kinded_token(stream, kind) =
+  let token := next_token(stream) in
+      if token_kind(token) = kind then
+          token
+      else
+          throw_with_range("Expected $k1 but found $k2 '$v'", 
+                           k1 := kind; v := token_value(token); k2 := token_kind(token),
+                           token_range(token))
+      end
+  end
+
+public procedure skip_token(stream) = next_token(stream)
+
+# ----------------------------------------------------------------------------
+# Token Readers
+#
+# These functions build tokens from characters
+# ----------------------------------------------------------------------------
+
+function read_number_token(stream) =
+  let
+      handle := token_stream_handle(stream);
+      digits := [];
+      while numeric(peek_next_char(handle)) do
+          digits := cons(next_char(handle), digits)
+      end;
+      if peek_next_char(handle) = \. then
+          digits := cons(next_char(handle), digits);
+          while numeric(peek_next_char(handle)) do
+              digits := cons(next_char(handle), digits)
+          end
+      end
+  in
+      read_num(string(reverse(digits)))
+  end
+
+function read_string_token(stream) =
+  let
+      handle := token_stream_handle(stream);
+      location := stream_location(stream);
+      quote := read_char(handle);
+      char := read_char(handle);
+      chars := [];
+      while char != \" do
+          if char = \eof then
+	      throw_with_location("String not closed with an end quote.", skip, location)
+	  else
+              chars := cons(char, chars);
+              char := read_char(handle)
+	  end
+      end
+  in
+      string(reverse(chars))
+  end
+
+function read_character_token(stream) =
+  let
+      handle := token_stream_handle(stream);
+      escape := read_char(handle);
+      char := read_char(handle);
+      chars := if alphabetic(char) then
+                   let
+	               chars := [char];
+                       while alphabetic(peek_char(handle)) do
+                           chars := cons(read_char(handle), chars)
+                       end
+	           in
+	               chars
+	           end
+               else
+                   [char]
+               end
+  in
+      string(reverse(chars))
+  end
+
+function read_identifier_token(stream) =
+  let
+      handle := token_stream_handle(stream);
+      first := next_char(handle)
+  in
+      if alphabetic(first) or first = \_ then
+          let
+	      chars := [first];
+              next := peek_char(handle);
+              while alphabetic(next) or numeric(next) or next = \_ do
+                  chars := cons(read_char(handle), chars);
+                  next := peek_char(handle)
+              end
+          in
+              string(reverse(chars))
+          end
+      else
+          throw(format("expected a letter or a '_' asas to start an identifier but found a '$char'", char := first))
+      end
+  end
+
+function read_operator_token(stream) =
+  let
+      handle := token_stream_handle(stream);
+      first := next_char(handle) 
+  in
+      if is_operator_character(first) then
+          let
+	      chars := [first]; 
+              next := peek_char(handle);
+              while is_operator_character(next) do
+                  chars := cons(read_char(handle), chars);
+                  next := peek_char(handle)
+              end
+          in
+              string(reverse(chars))
+          end
+      else
+          throw(format("expected a character to start an operator but found a '$char'", 
+                       char := first))
+      end
+  end
+  
+# ----------------------------------------------------------------------------
+# Characters Functions for Handles
+#
+# These functions handle comments and whitespace
+# ----------------------------------------------------------------------------
+
+function next_char(handle) =
+  let
+      skip_whitespace(handle);
+      char := read_char(handle);
+      while char = \# do
+          read_line_rest(handle);
+          skip_whitespace(handle);
+          char := read_char(handle)
+      end
+  in
+      char
+  end
+
+function peek_next_char(handle) =
+  let 
+      skip_whitespace(handle);
+      char := peek_char(handle);
+      while char = \# do
+          read_line_rest(handle);
+          skip_whitespace(handle);
+          char := peek_char(handle)
+      end
+  in
+      char
+  end
+
+function next_non_whitespace_char(handle) = 
+  let char := next_char(handle);
+      while  whitespace(char) do
+          char := next_char(handle)
+      end
+  in
+      char
+  end
+
+procedure skip_whitespace(handle) = 
+  let char := peek_char(handle) in
+      while whitespace(char) do
+          do read_char(handle) end;
+          char := peek_char(handle)
+      end
+  end
+
+procedure skip_char(handle) = next_char(handle)
+
+procedure read_line_rest(handle) =
+  let char := read_char(handle) in
+      while char != \newline and char != \eof do
+          char := read_char(handle)
+      end
+  end

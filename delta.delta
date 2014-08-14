@@ -1,0 +1,171 @@
+# ----------------------------------------------------------------------------
+# The Delta Language
+# ----------------------------------------------------------------------------
+
+module delta
+
+# ----------------------------------------------------------------------------
+# The Delta programming language
+# Copyright (C) 2012 Paul Griffioen
+# 
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+# 
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+# 
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+# ----------------------------------------------------------------------------
+
+include io, compiler
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+public procedure main(args) =
+  if args = [] then
+      handle_incorrect_command()
+  else
+      let
+          verb := first(args);
+	  command_args := rest(args)
+      in
+          if verb = "help" then
+	      handle_help_command(command_args)
+          elsif verb = "run" then
+	      handle_run_command(command_args)
+          elsif verb = "compile" then
+	      handle_compile_command(command_args)
+	  elsif verb = "exe" then
+	      handle_exe_command(command_args)
+	  else
+              handle_incorrect_command()
+          end
+      end
+  end
+
+# ----------------------------------------------------------------------------
+# Commands
+# ----------------------------------------------------------------------------
+
+procedure handle_incorrect_command() =
+  print_logo();
+  print_line("Type 'delta help' for help")
+
+procedure handle_help_command(args) = 
+  print_logo();
+  if args = [] then
+      print_help()
+  else
+      let
+          topic := first(args) 
+      in
+          if topic = "run" then
+	      print_run_help()
+	  elsif topic = "compile" then
+	      print_compile_help()
+	  elsif topic = "exe" then
+	      print_exe_help()
+	  else
+	      print_line(format("No help for '$x'", x := topic))
+	  end
+      end
+  end
+
+procedure handle_run_command(args) =
+  if args = [] then
+      print_line("Command 'run' expects a file argument. Type 'delta help' for further help.")
+  else
+      let
+          file := first(args);
+	  compiled := compile_project(file)
+      in
+          run_shell_command(format("racket $x $y",
+                                   x := compiled;
+				   y := intercalate(rest(args), " ")))
+      end
+  end
+
+procedure handle_compile_command(args) =
+  print_logo();
+  if args = [] then
+      print_line("Command 'compile' expects a file argument. Type 'delta help' for further help.")
+  else
+      let
+          file := first(args)
+      in
+          print_line(format("Compiling file $x", x := file));
+          compiled := compile_file(file);
+          print_line(format("Created file $x", x := compiled));
+	  print_line("Ready")
+      end	  
+  end
+
+procedure handle_exe_command(args) =
+  print_logo();
+  if args = [] then
+      print_line("Command 'exe' expects a file argument. Type 'delta help' for further help.")
+  else
+      let
+          file := first(args)
+      in
+          print_line(format("Compiling file $x\n", x := file));
+          compiled := compile_project(file);
+          print_line(format("Creating executable file $x", x := replace_suffix(compiled, "")));
+          run_shell_command(format("raco exe $x", x := replace_suffix(file, ".rkt")));
+          print_line("Ready")
+      end	  
+  end
+
+# ----------------------------------------------------------------------------
+# Printed output
+# ----------------------------------------------------------------------------
+
+procedure print_logo () =
+  print_line("\nDelta compiler version 0, Paul Griffioen 2012. Powered by Racket Scheme.\n")
+
+procedure print_help() =
+  print_line("The syntax is
+
+  delta command arg1 arg2 ...
+
+The following commands are supported:
+
+  help            Display this help.
+  help command    Display help for the command.
+  compile file    Compile the file to Scheme.
+  run file        Compile the file and its dependencies to Scheme
+                  and run 'main'.
+  exe file        Compile the file and its dependencies to Scheme 
+                  and create an executable that runs 'main'.\n")
+
+procedure print_run_help() =
+  print_line("The syntax is
+
+  delta run file
+
+Compiles the file and all its dependencies to Scheme and runs
+'main'. Leaves .rkt files for the compiled files.\n")
+
+procedure print_compile_help() =
+  print_line("The syntax is
+
+  delta compile file
+
+Compiles the file to Scheme. Creates a .rkt file with the same name as
+the module name. See command racket for further information.\n")
+
+procedure print_exe_help() =
+  print_line("The syntax is
+
+  delta exe file
+
+Compiles the file and all its dependencies to Scheme and create an
+executable that runs 'main'. See raco for further information.\n")
