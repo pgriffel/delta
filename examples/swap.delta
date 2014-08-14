@@ -1,0 +1,8 @@
+module swap
+
+public procedure main(args) =
+  a := "foo";
+  b := "bar";
+  (a := b | b := a);
+  print_line(a);
+  print_line(b)

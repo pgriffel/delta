@@ -1,0 +1,59 @@
+# Demonstration of tail recursion in recursive parallel calls
+#
+# Paul Griffioen 2012
+
+module message_loop_bound
+
+include channel
+
+public procedure main(args) = 
+  let 
+      channel_A := open_channel("channel A");
+      channel_B := open_channel("channel B");
+      channel_C := open_channel("channel C") 
+  in
+      sender(channel_A, 99999) |
+      buffer(channel_A, channel_B) |
+      buffer(channel_B, channel_C) |
+      receiver_rec(channel_C)
+  end
+  
+procedure sender(channel, count) =
+  let i := count in
+      while i != 0 do
+          i := i-1;
+          send(channel, "Hello World!");
+	  sleep(0.001)
+      end
+  end;
+  send(channel, "end")
+
+procedure buffer(input, output) =
+  let m := receive([input]) in
+      send(output, m.message) | 
+      if m.message != "end" then 
+          buffer(input, output)
+      end
+  end
+
+procedure receiver(channel) =
+  let m := receive([channel]) in
+      while m.message != "end" do
+          print_message(m);
+          m := receive([channel])
+      end
+  end
+
+procedure receiver_rec(channel) =
+  let m := receive([channel]) in
+      if m.message != "end" then
+          print_message(m);
+          receiver_rec(channel)
+      end
+  end
+
+procedure print_message(m) = 
+  print_line(format("$message from $channel",
+                    message := m.message;
+                    channel := channel_name(m.channel)))
+  

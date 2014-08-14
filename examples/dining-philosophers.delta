@@ -1,0 +1,116 @@
+# -----------------------------------------------------------------------------
+# Solution to Dijkstra's dining philosophers problem as presented by
+# Tanenbaum.
+# -----------------------------------------------------------------------------
+
+module dining_philosophers
+
+include semaphore
+
+public procedure main(args) =
+  let
+       party1 := ["Kant", "Hegel", "Russel", "Aristotle", "Plato", "Dennet"] |
+       party2 := ["Archimedes", "Gauss", "Newton", "Lagrange", "Boole", "Leibniz"] |
+       party3 := ["Turing", "Dijkstra", "Shannon", "Knuth", "Strachey", "Milner"]
+  in
+       dine(party1) | dine(party2) | dine(party3)
+  end
+
+define nr_thoughts = 10
+
+# -----------------------------------------------------------------------------
+# Dining
+# -----------------------------------------------------------------------------
+
+procedure dine(guests) = 
+  let table := new_table(guests) ;
+      eating := proc (guest)
+                    print_line(format("$name is eating", name := guest))
+	        end;
+      think := proc (guest)
+                   print_line(format("$name is thinking", name := guest));
+		   sleep(0.1)
+	       end
+  in
+      iter(table, eating, think, table.nr_guests)
+  end
+
+procedure iter(table, eating, thinking, i) =
+  if i != 0 then
+      dine_guest(table, eating, thinking, i-1) |   # change this | into ; to get round-robin
+      iter(table, eating, thinking, i-1)
+  end
+
+procedure dine_guest(table, eat, think, g) =
+  let
+      guest := get(table.guests, g) &
+      i := global nr_thoughts
+  in
+      while i != 0 do
+          do call(think, guest) end;
+          take_forks(table, g);
+          down(table.mutex);
+          do call(eat, guest) end;
+          up(table.mutex);
+          put_forks(table, g);
+          i := i-1
+      end
+  end
+
+# -----------------------------------------------------------------------------
+# The table
+# -----------------------------------------------------------------------------
+
+function new_table(guests) =
+  let
+      table := make_table(list_length(guests));
+      init_table(table, guests)
+  in
+      table
+  end
+
+function make_table(size) =
+  mutex       := make_semaphore(1);
+  nr_guests   := size;
+  guests      := make_array(size);
+  states      := make_array(size);
+  semaphores  := make_array(size)
+
+function right(table, i) = mod(i+1, table.nr_guests)
+
+function left(table, i) = mod(i-1, table.nr_guests)
+
+procedure init_table(table, names) =
+  let i := 0 in
+      while i != table.nr_guests do
+          set(table.guests, i, nth(i, names)) &
+          set(table.states, i, "thinking") &
+          set(table.semaphores, i, make_semaphore(0)) &
+          i := i+1
+      end
+  end
+ 
+procedure take_forks(table, guest) =
+  down(table.mutex);
+  set(table.states, guest, "hungry");
+  test(table, guest);
+  up(table.mutex);
+  down(get(table.semaphores, guest))
+  
+procedure put_forks(table, guest) =
+  down(table.mutex);
+  set(table.states, guest, "thinking");
+  test(table, left(table, guest));
+  test(table, right(table, guest));
+  up(table.mutex)
+
+procedure test(table, guest) =
+  let states := table.states in
+      if get(states, guest) = "hungry" and
+         get(states, left(table, guest)) != "eating" and
+         get(states, right(table, guest)) != "eating" 
+      then
+          set(states, guest, "eating");
+          up(get(table.semaphores, guest))
+      end
+  end

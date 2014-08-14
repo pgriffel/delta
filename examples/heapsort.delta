@@ -1,0 +1,56 @@
+# ----------------------------------------------------------------------------
+# Heapsort
+#
+# Paul Griffioen 2012-2012
+# ----------------------------------------------------------------------------
+
+module heapsort
+
+declare heapsort :: forall t: (Array(t), (t,t) -> Boole) -> {}
+
+public procedure heapsort(array, pred) =
+  let
+      n := array_length(array) 
+  in
+      x := n;
+      while x != 1 do
+          x := x - 1;
+	  sift(array, pred, x, n)
+      end;
+      x := n;
+      while x != 1 do
+          sift(array, pred, 0, x);
+	  x := x - 1;
+	  swap(array, 0, x)
+      end
+  end
+
+procedure sift(array, pred, p, m) =
+  first := first_child(p);
+  if first < m then
+      last := min(last_child(p), m - 1);
+      max := section_max(array, pred, first, last);
+      if call(pred, get(array, p), get(array, max)) then
+          swap(array, max, p);
+          sift(array, pred, max, m)
+      end
+  end
+
+function section_max(array, pred, i, j) =
+  let 
+      max := j;
+      x := j;
+      while x != i do
+          x := x - 1;
+	  larger := call(pred, get(array, max), get(array, x));
+	  max := if larger then x else max end
+      end
+  in
+      max
+  end
+
+define tree_arity = 3
+
+function last_child(x) = (x + 1) * global tree_arity
+
+function first_child(x) = (x * global tree_arity) + 1

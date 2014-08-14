@@ -1,0 +1,45 @@
+# ----------------------------------------------------------------------------
+# Quicksort
+#
+# Paul Griffioen 2010-2012
+# ----------------------------------------------------------------------------
+
+module quicksort
+
+declare quicksort :: forall t: (Array(t), (t,t) -> Boole) -> {}
+
+public procedure quicksort(array, pred) =
+  sort_part(array, 0, array_length(array)-1, pred)
+
+procedure sort_part(array, left, right, pred) = 
+  if left < right then
+      let
+          pos := partition(array, left, right, pred)
+      in
+          sort_part(array, left, pos-1, pred) |
+          sort_part(array, pos+1, right, pred)
+      end
+  end
+
+function partition(array, x, y, pred) = 
+  let
+      let
+          pivot := get(array, x);
+          i := x + 1;
+          j := y
+      in
+          while i < j do
+              while i < j and not(call(pred, pivot, get(array, i))) do
+                  i := i + 1
+              end;
+              while i < j and call(pred, pivot, get(array, j)) do
+                  j := j - 1
+              end;
+              if i < j then swap(array, i, j) end
+          end;
+          position := if call(pred, get(array, i), pivot) then i else i-1 end;
+          swap(array, x, position)
+      end
+  in
+      position
+  end

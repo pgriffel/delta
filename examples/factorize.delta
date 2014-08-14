@@ -1,0 +1,23 @@
+module factorize
+
+
+public procedure main(args) =
+  x := 2 * 2 * 3 * 5 * 7 * 11376534373267737;
+  print_line(factorize(x))
+
+function factorize(x) =
+  let 
+      m := x;
+      factors := [];
+      d := 2;
+      while not(m < d*d) do
+          if mod(m, d) = 0 then
+              factors := cons(d, factors) &
+              m := div(m, d)
+          else
+              d := d+1
+          end
+      end
+  in
+      cons(m, factors)
+  end

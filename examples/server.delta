@@ -1,0 +1,70 @@
+# ----------------------------------------------------------------------------
+# A server that handles sockets concurrently
+#
+# THIS IS EXPERIMENTAL WORK IN PROGRESS!!!
+#
+# Paul Griffioen 2012
+# ----------------------------------------------------------------------------
+
+module server
+
+include channel, socket
+
+public procedure main(args) =
+  let
+      port := "1234";
+      host := "localhost";
+      if args != [] then
+          port := first(args);
+          if rest(args) != [] then
+              host := second(args)
+          end
+      end;
+      socket := listen_on(host, port)
+  in
+      print_line(format("Running server on $x:$y.", x := host; y := port));
+      serve_socket(socket);
+      print_line("Bye")
+  end
+
+# ----------------------------------------------------------------------------
+# The server
+# ----------------------------------------------------------------------------
+
+procedure serve_socket(socket) =
+  let connection := accept(socket) in
+      serve_socket(socket) |
+      try
+          print_line("Connection started");
+          send_to(connection, "Welcome to the sleep server. Valid commands are 'sleep n' and 'bomb'");
+          serve_connection_rec(connection);
+          print_line("Connection terminated")
+      catch(error)
+          print_line(format("Connection aborted: $message", message := error))
+      end 
+  end
+
+procedure serve_connection_rec(connection) = 
+  let
+      message := receive_from(connection);
+      command := split_string(" ", message);
+      print_line(format("Incoming command: $x ", x := message))
+  in
+      if command = [] then
+          serve_connection_rec(connection)
+      elsif command = ["bomb"] then
+          send_to(connection, "Thanks a lot!");
+          throw("bomb dropped!")
+      elsif first(command) = "sleep" then
+          let
+              n := if rest(command) = [] then 1 else read_num(second(command)) end
+           in
+              sleep(n);
+              send_to(connection, format("slept $x seconds", x := n))
+          end |
+          serve_connection_rec(connection)
+      else
+          send_to(connection, format("Invalid command: $message", message := first(command)));
+          serve_connection_rec(connection)
+      end
+  end

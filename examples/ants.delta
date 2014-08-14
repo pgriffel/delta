@@ -1,0 +1,309 @@
+module ants
+
+# ----------------------------------------------------------------------------
+# Ant Colony Demo
+#
+# Variation on Rick Hickey's Ant Colony. Ants collect food in a square
+# world and they communicate with pheromones. See the video at
+# http://blip.tv/clojure/clojure-concurrency-819147.
+#
+# The challenge is to use synchronized threads that scale on multicores:
+# - Each ant runs in a thread
+# - All world mutations are atomic and consistent
+# - Each snapshot shows a consistent world
+#
+# Each cell in the world has a mutex to make mutations
+# atomic. Rendering is done in a seperate thread that uses one mutex
+# to synchronize with the GUI. When a mutation in the world occurs a
+# message is send to the seperate rendering thread. For the renderer
+# all actions are sequential in time.
+#
+# Paul Griffioen - 2012
+# ----------------------------------------------------------------------------
+
+include ants_world, gui
+
+define nr_ants = 250                        # Number of ants in the simulation
+define initial_pheromones = 5               # Ant's initial amount of blue pheromones
+define exitement_factor = 0.3               # Red pheromones aquired per unit of food found
+define drop_rate = 0.02                     # Fraction of ant's pheromone dropped per move
+define ant_sleep = 0.1                      # Seconds of sleep between ant activity
+define evaporation_rate = 0.9               # Evaporation rate of pheromones
+define evaporation_sleep = 1                # Seconds of sleep between evaporations
+define feeding_interval = [30, 60]          # Random seconds of sleep between feeding
+define feeding_level = [3,6]                # Limits the random amount of food
+
+define size = 100                           # Width and height of the world's grid
+define home_size = 2                        # Distance to home where ants drop food
+define random_obstacle_count = [50, 100]    # Range for random number of obstacles
+define random_obstacle_level = [2, 7]       # Limits the random size of obstacles
+define square_obstacle_count = [3, 10]      # Range for random number of square obstacles
+define square_obstacle_level = [5, 20]      # Maximum width and height of square obstacles
+
+define cell_size = 6                        # Width and height of a cell in pixels
+define view_sleep = 0.1                     # Seconds of sleep between screen refreshes
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+public procedure main(args) =
+  let 
+      world := make_world(global size);
+      view := make_view(world, global cell_size)
+  in
+      (setup_world(world) ; run_world(world)) | run_view(view, global view_sleep)
+  end
+
+# ----------------------------------------------------------------------------
+# The Simulation
+# ----------------------------------------------------------------------------
+
+procedure setup_world(world) =
+  add_border_obstacles(world);
+  add_random_obstacles(world)
+
+procedure run_world(world) =
+  place_ants(world, random_free_position(world), global nr_ants) |
+  while true do
+      place_food_heap(world, random_free_position(world), pick(global feeding_level));
+      sleep(pick(global feeding_interval))
+  end |
+  while true do
+      sleep(global evaporation_sleep);
+      reduce_pheromone(world, global evaporation_rate)
+  end
+
+procedure place_ants(world, home, n) =
+  if n = 0 then
+      print_line("All ants have left the building")
+  else
+      if occupy(world, home, global status_forresting) then
+          run_ant(world, home) |
+          place_ants(world, home, n - 1) |
+	  if mod(n, 10) = 0 then
+	      print_line(format("Placed ant $x", x := n))
+          end
+      else
+          place_ants(world, home, n)
+      end
+  end
+
+procedure place_food_heap(world, pos, n) =
+  if 0 < n and world_status(world, pos) != global status_obstacle then
+      put_food(world, pos, random_integer(n) + 1);
+      do_times(8,
+          proc (i)
+              place_food_heap(world, forward(world, pos, i), random_integer(n))
+          end)
+  end	      
+  
+procedure run_ant(world, home) =
+  let
+      food := 0;
+      forresting := true;
+      position := home;
+      direction := random_integer(8);
+      pheromone_0 := global initial_pheromones;
+      pheromone_1 := 0
+  in
+      while true do
+
+          # If food or home is found then take or put the food and
+          # switch roles.
+	  let
+	      home_distance := distance(home, position);
+	      food_found := world_food(world, position)
+	  in
+	      if forresting and food_found > 0 and home_distance >= global home_size then
+	          food := take_food(world, position);
+	          if 0 < food then
+	              forresting := false;
+		      do switch_status(world, position, global status_returning) end;
+	              pheromone_1 := global exitement_factor * food_found;
+	              direction := turn(direction, 4)
+	          end
+	      elsif not(forresting) and home_distance < global home_size then
+	          put_food(world, position, food);
+	          food := 0;
+	          forresting := true;
+                  do switch_status(world, position, global status_forresting) end;
+	          pheromone_0 := global initial_pheromones;
+                  direction := turn(direction, 4)
+              end
+	  end;
+
+	  # Choose the best direction. Calculate a score for every
+	  # possible forward direction and randomly pick the direction
+	  # using the scores as weights.
+          let
+              scores := make_array(3);
+              do_times(3,
+	          proc (i)
+	              set(scores, i,
+		          direction_score(world, position, turn(direction, i - 1), forresting))
+	          end)
+          in
+              direction := turn(direction, pick_option(scores) - 1)
+	  end;
+
+	  # Try to move in the best direction. If succesful then drop
+	  # some pheromones and update the position.
+          let reached := move(world, position, direction) in
+              if reached != position then
+	          let
+		      drop := global drop_rate * if forresting then pheromone_0 else pheromone_1 end
+		  in
+		      put_pheromone(world, position, drop, if forresting then 0 else 1 end);
+                      if forresting then
+                          pheromone_0 := pheromone_0 - drop
+		      else
+		          pheromone_1 := pheromone_1 - drop
+		      end
+	          end;
+                  position := reached
+	      end
+          end;
+
+          sleep(global ant_sleep)
+
+      end
+  end
+
+function direction_score(world, position, direction, forresting) =
+  let candidate := forward(world, position, direction) in
+      if world_status(world, candidate) = global status_empty then
+          let
+	      ph0 := world_pheromone(world, candidate, 0);
+	      ph1 := world_pheromone(world, candidate, 1)
+	  in
+              if forresting then ph1^2/(1 + ph0^2) else ph0^2/(1 + ph1^2) end
+	  end
+      else
+          0
+      end
+  end
+
+function random_free_position(world) =
+  let
+      position := random_position(world);
+      while world_status(world, position) = global status_obstacle do
+          position := random_position(world)
+      end
+  in
+      position
+  end
+
+# ----------------------------------------------------------------------------
+# The World
+# ----------------------------------------------------------------------------
+
+procedure add_border_obstacles(world) =
+  do_times(world_size(world),
+      proc (i)
+          add_obstacle(world, make_position(i, 0));
+          add_obstacle(world, make_position(0, i));
+          add_obstacle(world, make_position(i, world_size(world) - 1));
+          add_obstacle(world, make_position(world_size(world) - 1, i))
+      end)
+
+procedure add_random_obstacles(world) =
+  if world_size(world) = 62 then			  
+      add_fixed_obstacles(world)
+  else
+      do_times(pick(global random_obstacle_count),
+          proc (i)
+              place_random_obstacle(world,
+                                    random_position(world),
+                                    pick(global random_obstacle_level))
+          end) ;
+      do_times(pick(global square_obstacle_count),
+          proc (i)
+              let
+                  width := pick(global square_obstacle_level);
+                  height := pick(global square_obstacle_level);
+                  x := random_integer(world_size(world) - width);
+                  y := random_integer(world_size(world) - height)
+              in
+                  place_square_obstacle(world, x, y, width, height)
+              end
+          end)
+  end
+
+procedure place_random_obstacle(world, pos, n) =
+  if 0 < n then
+      add_obstacle(world, pos);
+      do_times(8,
+          proc (i)
+              place_random_obstacle(world, forward(world, pos, i), random_integer(n))
+          end)
+  end	      
+
+procedure place_square_obstacle(world, x, y, width, height) =
+  do_times(width,
+      proc (i)
+          do_times(height,
+              proc (j)
+                  add_obstacle(world, make_position(x + i, y + j))
+              end)
+      end)
+
+procedure add_fixed_obstacles(world) =
+  do_list([[-1, -1, 60, 1], [-1, 58, 60, 1], [-1, 0, 3, 25],
+           [-1, 29, 3, 29], [56, 0, 3, 25], [56, 29, 3, 29],
+	   [2, 18, 10, 7], [2, 29, 10, 7], [2, 46, 4, 2],
+	   [6, 4, 6, 4], [6, 12, 6, 2], [6, 40, 6, 2],
+	   [6, 52 , 18, 2], [10, 42, 2, 6], [16, 4, 8, 4],
+	   [16, 12, 2, 13], [16, 18, 8, 2], [16, 29, 2, 7],
+	   [16, 40, 8, 2], [16, 46, 2, 6], [22, 12, 14, 2],
+	   [22, 24, 13, 1], [22, 29, 13, 1], [22, 24, 1, 6],
+	   [35, 24, 1, 6], [22, 34, 14, 2], [22, 46, 14, 2],
+	   [28, 0, 2, 8], [28, 12, 2, 8], [28, 34, 2, 8],
+	   [28, 46, 2, 8], [34, 4, 8, 4], [34, 18, 8, 2],
+	   [34, 40, 8, 2], [34, 52, 18, 2], [40, 12, 2, 12],
+	   [40, 19, 2, 6], [40, 29, 2, 7], [40, 46, 2, 7],
+	   [46, 4, 6, 4], [46, 12, 6, 2], [46, 18, 10, 7],
+	   [46, 29, 10, 7], [46, 40, 6, 2], [46, 40, 2, 8],
+	   [52, 46, 4, 2]],
+          proc (x)
+	      place_square_obstacle(world, nth(0, x) + 2, nth(1, x) + 2, nth(2, x), nth(3, x))
+	  end);
+  do_times(4,
+      proc (i)
+	  do switch_status(world, make_position(0, 27 + i), global status_empty) end;
+	  do switch_status(world, make_position(61, 27 + i), global status_empty) end;
+	  do switch_status(world, make_position(29 + i, 26), global status_empty) end
+      end)
+
+procedure add_obstacle(world, position) =
+  occupy(world, position, global status_obstacle)
+
+# ----------------------------------------------------------------------------
+# Function 'pick' randomly chooses an element between the upper and
+# lower bounds of the given range with uniform probability. Function
+# 'pick_option' chooses an index for an array of weights with a
+# probability proportional to the weights. If the sum of the weights
+# is zero then an index is picked uniformly.
+# ----------------------------------------------------------------------------
+
+function pick(range) =
+  first(range) + random_integer(second(range) - first(range) + 1)
+
+function pick_option(options) =
+  let total := array_sum(options) in
+      if total = 0 then
+          random_integer(array_length(options))
+      else
+          let
+              r := random();
+	      picked := 0;
+	      norm := get(options, picked) / total;
+	      while norm < r do
+	          picked := picked + 1;
+	          norm := norm + get(options, picked) / total
+	      end
+	  in
+	      picked
+	  end
+      end
+  end

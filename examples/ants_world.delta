@@ -1,0 +1,470 @@
+module ants_world
+
+include gui, semaphore, channel
+  
+# ----------------------------------------------------------------------------
+# Signature
+# ----------------------------------------------------------------------------
+
+declare make_position :: (Number, Number) -> Position
+declare position_x :: (Position) -> Number
+declare position_y :: (Position) -> Number
+declare random_position :: (World) -> Position
+declare forward :: (World, Position, Number) -> Position
+declare turn :: (Number, Number) -> Number
+declare distance :: (Position, Position) -> Number
+
+declare make_world :: (Number) -> World
+declare world_size :: (World) -> Number
+declare world_status :: (World, Position) -> Status
+declare world_food :: (World, Position) -> Number
+declare world_pheromone :: (World, Position, Number) -> Number
+declare occupy :: (World, Position, Status) -> Boole
+declare move :: (World, Position, Number) -> Position
+declare switch_status :: (World, Position, Status) -> Boole
+declare put_food :: (World, Position, Number) -> {}
+declare take_food :: (World, Position) -> Number
+declare put_pheromone :: (World, Position, Number, Number) -> {}
+declare reduce_pheromone ::(World, Number) -> {}
+
+declare make_view :: (World, Number) -> View
+declare run_view :: (View, Number) -> {}
+
+declare status_empty :: Status
+declare status_forresting :: Status
+declare status_returning :: Status
+declare status_obstacle :: Status
+
+# ----------------------------------------------------------------------------
+# Positions
+# ----------------------------------------------------------------------------
+
+public function make_position(x,y) = [x, y]
+
+public function position_x(pos) = first(pos)
+
+public function position_y(pos) = second(pos)
+		   
+public function forward(world, pos, direction) =
+  let offset := get(global dirs, direction) in
+      make_position(mod(position_x(pos) + position_x(offset), world_size(world)),
+                    mod(position_y(pos) + position_y(offset), world_size(world)))
+  end
+
+public function turn(direction, angle) = 
+  mod(direction + angle, 8)
+
+public function random_position(world) =
+  make_position(random_integer(world_size(world)), 
+                random_integer(world_size(world)))
+
+public function distance(position_1, position_2) =
+  let
+      dx := position_x(position_1) - position_x(position_2);
+      dy := position_y(position_1) - position_y(position_2)
+  in
+      sqrt(dx^2 + dy^2)
+  end
+
+define dirs = 
+  array_from_list([make_position(1,0),
+                   make_position(1,1),
+		   make_position(0,1),
+		   make_position(-1,1),
+		   make_position(-1,0),
+		   make_position(-1,-1),
+		   make_position(0,-1),
+		   make_position(1,-1)])
+
+# ----------------------------------------------------------------------------
+# Cells
+# ----------------------------------------------------------------------------
+
+declare empty_cell :: () -> Cell
+declare get_food :: (Cell) -> Number
+declare set_food :: (Cell, Number) -> Cell
+declare get_status :: (Cell) -> Status
+declare set_status :: (Cell, Status) -> Cell
+declare get_pheromone :: (Cell, Number) -> Number
+declare set_pheromone :: (Cell, Number, Number) -> Cell
+
+function empty_cell() =
+  status := global status_empty;
+  food := 0;
+  pheromone_0 := 0;
+  pheromone_1 := 0
+
+function set_food(cell, amount) =
+  merge(cell, food := amount)
+
+function set_status(cell, status) =
+  merge(cell, status := status)
+
+function set_pheromone(cell, amount, kind) =
+  merge(cell, if kind = 0 then
+                  pheromone_0 := amount
+	      else
+                  pheromone_1 := amount
+	      end)
+
+function get_food(cell) =
+  cell.food
+
+function get_status(cell) =
+  cell.status
+
+function get_pheromone(cell, kind) =
+  if kind = 0 then
+      cell.pheromone_0
+  else
+      cell.pheromone_1
+  end
+
+# ----------------------------------------------------------------------------
+# Grids
+# ----------------------------------------------------------------------------
+
+function make_grid(size, filler) =
+  let
+      array1 := make_array(size);
+      do_times(size,
+          proc (i)
+              let array2 := make_array(size) in
+	          do_times(size,
+		      proc (j)
+		          set(array2, j, call(filler, i, j))
+		      end);
+                  set(array1, i, array2)
+	      end
+	  end)
+  in
+      array1
+  end
+
+function copy_grid(grid) = 
+  make_grid(grid_size(grid), fun (i, j) grid_get(grid, make_position(i, j)) end)
+
+function grid_size(grid) = 
+  array_length(grid)
+
+procedure grid_set(grid, position, cell) =
+  set(get(grid, position_x(position)), position_y(position), cell)
+
+function grid_get(grid, position) =
+  get(get(grid, position_x(position)), position_y(position))
+
+procedure do_grid(grid, action) =
+  do_times(grid_size(grid),
+           proc (i)
+               do_times(grid_size(grid),
+                        proc (j)
+			    do call(action, make_position(i, j)) end
+			end)
+           end)
+
+# ----------------------------------------------------------------------------
+# The World
+# ----------------------------------------------------------------------------
+
+public define status_empty = 0
+public define status_forresting = 1
+public define status_returning = 2
+public define status_obstacle = 3
+
+public function make_world(size) =
+  cells := make_grid(size, fun (i, j) empty_cell() end);
+  mutexes := make_grid(size, fun (i, j) make_semaphore(1) end);
+  channel := open_channel("snapshot channel")
+
+public function world_size(world) = 
+  grid_size(world.cells)
+
+function get_mutex(world, position) =
+  grid_get(world.mutexes, position)
+
+public function world_pheromone(world, position, kind) =
+  get_pheromone(grid_get(world.cells, position), kind)
+
+public function world_status(world, position) =
+  get_status(grid_get(world.cells, position))
+
+public function world_food(world, position) =
+  get_food(grid_get(world.cells, position))
+
+public procedure do_positions(world, action) =
+  do_times(world_size(world),
+           proc (i)
+               do_times(world_size(world),
+                        proc (j)
+			    do call(action, make_position(i, j)) end
+			end)
+           end)
+
+declare send_update :: (World, Position) -> {}
+
+procedure send_update(world, position) =
+  send(world.channel, position := position;
+                      cell := grid_get(world.cells, position))
+
+# ----------------------------------------------------------------------------
+# Synchronized Actions
+# ----------------------------------------------------------------------------
+
+public function occupy(world, position, status) =
+  let
+      mutex := get_mutex(world, position);
+      down(mutex);
+      dst := grid_get(world.cells, position);
+      current_status := get_status(dst)
+  in
+      if current_status != 0 then
+          let up(mutex) in false end
+      else
+          let
+              grid_set(world.cells, position, set_status(dst, status));
+	      send_update(world, position);
+              up(mutex)
+	  in
+	      true
+	  end
+      end
+  end
+
+public function switch_status(world, position, status) =
+  let
+      mutex := get_mutex(world, position);
+      down(mutex);
+      cell := grid_get(world.cells, position);
+      old_status := get_status(cell)
+  in
+      if old_status = 0 then
+          let up(mutex) in false end
+      else
+          let
+	      grid_set(world.cells, position, set_status(cell, status));
+      	      send_update(world, position);
+              up(mutex)
+	  in
+	      true
+	  end
+      end
+  end
+
+public function move(world, position, direction) =
+  let
+      candidate := forward(world, position, direction);
+      dst_mutex := get_mutex(world, candidate);
+      down(dst_mutex);
+      dst := grid_get(world.cells, candidate)
+  in
+      if get_status(dst) != global status_empty then
+          let up(dst_mutex) in position end
+      else
+          let
+              # It's safe to use the source status without the mutex
+              # aquired because nobody alters it.
+	      grid_set(world.cells,
+	                    candidate,
+			    set_status(dst, get_status(grid_get(world.cells, position))));
+              up(dst_mutex);
+              src_mutex := get_mutex(world, candidate);
+	      down(src_mutex);
+	      grid_set(world.cells,
+	                    position,
+			    set_status(grid_get(world.cells, position), 0));
+      	      send_update(world, position);
+	      send_update(world, candidate);
+              up(src_mutex)
+	  in
+	      candidate
+	  end
+      end
+  end
+
+public function take_food(world, position) =
+  let
+      mutex := get_mutex(world, position);
+      down(mutex);
+      let
+          cell := grid_get(world.cells, position);
+          current := get_food(cell)
+      in
+          diff := min(current, 1);
+          grid_set(world.cells, position, set_food(cell, current - diff))
+      end;
+      send_update(world, position);
+      up(mutex);
+      print_line(format("Taken $x food at $p", x := diff; p := position))
+  in
+      diff
+  end
+
+public procedure put_food(world, position, amount) =
+  let mutex := get_mutex(world, position) in
+      down(mutex);
+      let
+          cell := grid_get(world.cells, position)
+      in
+          amount := get_food(cell) + amount;
+          grid_set(world.cells, position, set_food(cell, amount))
+      end;
+      send_update(world, position);
+      up(mutex);
+      print_line(format("Increased food to $x at $p", x := amount; p := position))
+  end
+
+public procedure put_pheromone(world, position, amount, kind) =
+  let mutex := get_mutex(world, position) in
+      down(mutex);
+      let cell := grid_get(world.cells, position) in
+          grid_set(world.cells, position, set_pheromone(cell, get_pheromone(cell, kind) + amount, kind))
+      end;
+      send_update(world, position);
+      up(mutex)
+  end
+
+public procedure reduce_pheromone(world, factor) =
+  do_positions(world,
+               proc (pos)
+                   reduce_cell_pheromone(world, pos, factor)
+               end)
+
+declare reduce_cell_pheromone :: (World, Postion, Number) -> {}
+
+procedure reduce_cell_pheromone(world, position, factor) =
+  let mutex := get_mutex(world, position) in
+      down(mutex);
+      let cell := grid_get(world.cells, position) in
+          grid_set(world.cells, position, set_pheromone(cell, get_pheromone(cell, 0) * factor, 0))
+      end;
+      let cell := grid_get(world.cells, position) in
+          grid_set(world.cells, position, set_pheromone(cell, get_pheromone(cell, 1) * factor, 1))
+      end;
+      send_update(world, position);
+      up(mutex)
+  end
+
+# ----------------------------------------------------------------------------
+# Graphics
+# ----------------------------------------------------------------------------
+
+define snapshot_mutex = make_semaphore(1)
+
+public function make_view(world, cell_size) = 
+  let
+      grid := copy_grid(world.cells);
+      length := world_size(world) * cell_size;
+      window := make_window("Ants Demo", length, length,
+			    let snapshot := copy_grid(grid) in
+			        proc (window, dc)
+                                    down(global snapshot_mutex);
+                                    do_grid(grid,
+                                        proc (pos)
+                                            grid_set(snapshot, pos, grid_get(grid, pos))
+                                        end);
+			            up(global snapshot_mutex);
+				    paint_grid(snapshot, dc, cell_size)
+			        end
+			    end);
+      set_background(window, color("darkgreen"))
+  in
+      channel := world.channel;
+      window := window;
+      cells := grid
+  end
+
+public procedure run_view(view, snapshot_sleep) =
+  let
+      start := now();
+      count := 0
+  in
+      while true do
+          refresh(view.window);
+	  count := count + 1;
+	  if mod(count, 10) = 0 then
+	      let rate := 1000.0 * count / (now() - start) in
+	          print_line(if snapshot_sleep = 0 then
+                                 format("Refresh rate is $r frame/s", r := rate)
+			     else
+		                 format("Refresh rate is $r frame/s, max is $m frame/s",
+	                                r := rate; m := 1 / snapshot_sleep)
+			     end)
+              end;
+              start := now();
+              count := 0
+	  end;
+          sleep(snapshot_sleep)
+      end |
+      while true do
+          let m := receive([view.channel]).message in 
+              down(global snapshot_mutex);
+	      grid_set(view.cells, m.position, m.cell);
+              up(global snapshot_mutex)
+          end
+       end
+   end
+
+procedure paint_grid(grid, dc, size) =
+  do_grid(grid,
+      proc (pos)
+          paint_cell(grid_get(grid, pos), dc, pos, size)
+      end)
+
+procedure paint_cell(cell, dc, position, size) =
+  let 
+      x := size * position_x(position);
+      y := size * position_y(position);     
+      half := size / 2;
+      double := size * 2
+  in
+      let ph_0 := get_pheromone(cell, 0) in
+          if 0 < ph_0 then
+              draw_rectangle(dc, x - half, y - half, double, double,
+	                     color_0(ph_0 / (ph_0 + 1.0)))
+          end
+      end;
+      let ph_1 := get_pheromone(cell, 1) in
+          if 0 < ph_1 then
+              draw_rectangle(dc, x - half, y - half, double, double,
+	                     color_1(ph_1 / (ph_1 + 1.0)))
+	  end
+      end;
+      let food := get_food(cell) in
+          if 0 < food then
+              let alpha := food / (food + 5.0) in
+		  draw_point(dc, x, y, (0.25 + alpha) * size, global food_color)
+	      end
+	  end
+      end;
+      let status := get_status(cell) in
+          if status = global status_forresting then
+              draw_point(dc, x + half, y + half, 2, global ant_forresting_color)
+          elsif status = global status_returning then
+              draw_point(dc, x + half, y + half, 2, global ant_returning_color)
+          elsif status = global status_obstacle then
+              draw_ellipse(dc, x, y, size, size, global obstacle_color)
+          end
+      end
+  end
+
+define ant_forresting_color = rgb(20, 20, 20, 0.5)
+
+define ant_returning_color = rgb(200, 200, 0, 0.5)
+
+define black = rgb(20, 20, 20, 0.5)
+
+define obstacle_color = rgb(60, 60, 20, 1)
+
+define food_color = rgb(250, 250, 25, 0.8)
+
+define blue_colors =
+  map_list(fun (i) rgb(130, 130, 150, i / 25) end, naturals(25))
+
+define red_colors =
+  map_list(fun (i) rgb(240, 100, 100, i / 25) end, naturals(25))
+
+function color_0(alpha) =
+  nth(floor(alpha * 25), global blue_colors)
+
+function color_1(alpha) =
+  nth(floor(alpha * 25), global red_colors)

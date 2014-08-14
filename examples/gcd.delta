@@ -1,0 +1,41 @@
+# Demonstrates first class states
+# Paul Griffioen 2010
+
+module gcd
+
+public procedure main(args) =
+  print_line("Calculate the greatest common divisor");
+
+  print("first integer: ");
+  num1 := read_num(ask_line());
+
+  print("second integer: ");
+  num2 := read_num(ask_line());
+
+  let
+      problem := format("The solution of x*$a + y*$b = gcd($a,$b) is $$x*$a + $$y*$b = $$gcd", 
+                        a := num1 & b := num2) 
+  in
+      print_line(format(problem, gcd_calc(num1, num2)))
+  end
+
+function gcd_calc(a, b) = 
+  let
+      s := (gcd := a & x := 1 & y := 0) ;
+      t := (gcd := b & x := 0 & y := 1) ;
+      while mod(s.gcd, t.gcd) != 0 do
+          s := t |
+          t := shuffle(s, t)
+      end
+  in
+      t
+  end
+
+function shuffle(u, v) = 
+  let
+      q := div(u.gcd, v.gcd)
+  in
+      gcd := u.gcd - q*v.gcd  &
+        x := u.x - q*v.x  &
+        y := u.y - q*v.y
+  end

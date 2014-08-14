@@ -1,0 +1,68 @@
+# ----------------------------------------------------------------------------
+# Client
+#
+# Paul Griffioen 2012-2012
+# ----------------------------------------------------------------------------
+
+module client
+
+include channel, socket
+
+public procedure main(args) =
+  let
+      port := "1234";
+      host := "localhost";
+      if args != [] then
+          port := first(args);
+          if rest(args) != [] then
+              host := second(args)
+          end
+      end
+  in
+      print_line(format("Running client on $x:$y.", x := host; y := port));
+      print_line("Type a command or 'quit' to end the conversation");
+      run_client(host, port);
+      print_line("Bye")
+  end
+
+procedure run_client(host, port) =
+  let
+      connection := connect_to(host, port)
+  in
+      try
+          print_line(receive_from(connection));
+          run_connection(connection)
+      catch(error)
+          print_line(format("Error: $x", x := error))
+      end;
+      close(connection)
+  end
+
+procedure run_connection(connection) =
+  let 
+      command := ask_command()
+  in
+      if command != "quit" then
+          handle_command(command, connection) |    # change | to ; for synchronuous version
+          run_connection(connection)
+      end
+  end
+
+procedure handle_command(command, connection) = 
+  send_to(connection, command) |
+  let
+      reply := receive_from(connection)
+  in
+      if reply = \eof then
+          throw("The connection was closed")
+      else
+          print(">");
+          print_line(reply);
+	  print(">")
+      end
+  end
+
+function ask_command() =
+  let print(">") in
+      ask_line()
+  end

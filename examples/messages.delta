@@ -1,0 +1,41 @@
+# Demonstrates channels
+#
+# Paul Griffioen 2012
+
+module messages
+
+include channel
+
+public procedure main(args) = 
+
+   (ch0 := open_channel("test channel")  |
+    ch1 := open_channel("another test channel")  |
+    ch2 := open_channel("and another test channel")  |
+    ch3 := open_channel("and another other test channel"));
+
+    print_line("Channels open");
+    
+   (send(ch0, "1") |
+    send(ch1, "2") |
+    send(ch0, "3") |
+    send(ch3, "4") |
+
+   (message1 := concatenate("message1=", receive_message(ch0,ch1)) ;
+    message2 := concatenate("message2=", receive_message(ch0,ch1)) ;
+    message3 := concatenate("message3=", receive_message(ch0,ch1)) ;
+    message4 := concatenate("message3=", receive_message(ch2,ch3)))) ;
+
+   print_line(message1);
+   print_line(message2);
+   print_line(message3);
+   print_line(message4)
+
+function receive_message(x,y) =
+  let m := receive([x,y]);
+      print_line(format("Receiving $text from $channel",
+                        text := m.message;
+	                channel := channel_name(m.channel)))
+  in
+    m.message
+  end
+

@@ -1,0 +1,37 @@
+# ----------------------------------------------------------------------------
+# Sort
+#
+# Paul Griffioen 2012-2012
+# ----------------------------------------------------------------------------
+
+module sort
+
+include heapsort, quicksort
+
+public procedure main(args) =
+  test(global heapsort);
+  test(global quicksort)
+  
+procedure test(sorter) =
+  let array := array_from_list(global some_numbers) in
+      do call(sorter, array, fun (x,y) x<y end) end;
+      display(array)
+  end
+
+define some_numbers = 
+  [9124, 8641, 8498, 9243, 4316, 7531, 2097,
+   6187,   44, 5875, 1821, 9512,  505, 1337,
+   7016, 2797, 2901, 6934, 7470, 2232, 5151,
+   7068, 9790, 2003, 2911, 5621, 6167, 2269,
+   4482, 7459, 3301, 6825, 4344, 2221, 8282]
+
+procedure display(arr) =
+  let i := array_length(arr) in
+      while i != 0 do
+          i := i - 1;
+          print_line(format("get(arr, $index) = $value",	
+                            index := i;
+                            value := get(arr, index)))
+      end
+  end
+
