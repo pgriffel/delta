@@ -7,7 +7,7 @@ layout: default
 Swap <a name="Swap"> </a>
 ----
 
-The [swap](examples/swap.delta) example demonstrates parallel
+The [swap](https://raw.githubusercontent.com/pgriffel/delta/gh-pages/examples/swap.delta) example demonstrates parallel
 composition. It is more general than parallel assignment.
 
 
